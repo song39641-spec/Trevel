@@ -1,833 +1,858 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { 
-  Calendar, MapPin, Utensils, CloudSun, ClipboardList, Ticket, 
-  Plus, Trash2, Navigation, Heart, Edit2, CheckCircle, 
-  ExternalLink, Loader2, RefreshCw, Image as ImageIcon, X,
-  Languages, Sparkles, Cloud, Save
-} from 'lucide-react';
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>日本蜜月行程管家</title>
+  <meta name="robots" content="noindex, nofollow">
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Babel for JSX execution in browser -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-// --- Firebase Imports ---
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
-import { getFirestore, doc, setDoc, onSnapshot, collection } from 'firebase/firestore';
-
-// --- Configuration ---
-const apiKey = "AIzaSyBbntGqc70xYx8h1g3nGhrOiLHhuF8W10w";
-
-const firebaseConfig = {
-  apiKey: "AIzaSyBFu36_wc5-5cOWOppnfQpQ1l27fRH1mOU",
-  authDomain: "travel-5f00e.firebaseapp.com",
-  projectId: "travel-5f00e",
-  storageBucket: "travel-5f00e.firebasestorage.app",
-  messagingSenderId: "235781447903",
-  appId: "1:235781447903:web:ac6df0a4c41cabf18c096a",
-  measurementId: "G-S4N7CJ9WC8"
-};
-
-// --- Firebase Initialization ---
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-// 使用全域變數或預設值作為 App ID
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-
-const App = () => {
-  const [activeTab, setActiveTab] = useState('planner');
-  const [loading, setLoading] = useState(false);
-  const [currency, setCurrency] = useState({ twd: 100, jpy: 0 });
-
-  // --- State: User & Cloud ---
-  const [user, setUser] = useState(null);
-  const [isSaving, setIsSaving] = useState(false);
-  const isRemoteUpdate = useRef(false); // 用來防止本地儲存循環觸發
-  const saveTimeoutRef = useRef(null);
-
-  // --- State: 行程管理 ---
-  const [trips, setTrips] = useState([]);
-  const [selectedTripId, setSelectedTripId] = useState(null);
-  const [showAddTrip, setShowAddTrip] = useState(false);
-  const [newTripForm, setNewTripForm] = useState({ location: '北海道', days: 8, startDate: '2026-03-04' });
-
-  // --- State: 準備清單 ---
-  const [memos, setMemos] = useState([]);
-  const [packingList, setPackingList] = useState([
-    { id: 1, text: '護照與機票', checked: false },
-    { id: 2, text: '發熱衣與保暖外套 (3月仍冷)', checked: false },
-    { id: 3, text: '日幣現金與信用卡', checked: false },
-    { id: 4, text: '行動電源與轉接頭', checked: false },
-  ]);
-  const [newItemText, setNewItemText] = useState('');
-  const [suggestingItems, setSuggestingItems] = useState(false);
-
-  // --- State: 優惠券 ---
-  const [coupons, setCoupons] = useState([
-    { id: 1, title: 'Bic Camera 7%折扣', code: 'BC2024', description: '電器免稅用', image: null }
-  ]);
-  const [showAddCoupon, setShowAddCoupon] = useState(false);
-  const [newCouponForm, setNewCouponForm] = useState({ title: '', code: '', description: '', image: null });
-  const fileInputRef = useRef(null);
-
-  // --- State: 美食與定位 ---
-  const [location, setLocation] = useState(null);
-  const [nearbyFood, setNearbyFood] = useState([]);
-
-  // --- State: AI 翻譯 ---
-  const [transInput, setTransInput] = useState('');
-  const [transResult, setTransResult] = useState(null);
-  const [translating, setTranslating] = useState(false);
-
-  // --- Effect: 防止爬蟲 (Noindex) ---
-  useEffect(() => {
-    // 動態加入 meta tag 防止爬蟲
-    const meta = document.createElement('meta');
-    meta.name = "robots";
-    meta.content = "noindex, nofollow";
-    document.getElementsByTagName('head')[0].appendChild(meta);
-    
-    // 初始化匯率
-    setCurrency(prev => ({ ...prev, jpy: Math.round(prev.twd / 0.21) }));
-  }, []);
-
-  // --- Effect: Firebase Authentication ---
-  useEffect(() => {
-    const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          try {
-            // 嘗試使用環境提供的 token 登入
-            await signInWithCustomToken(auth, __initial_auth_token);
-          } catch (tokenError) {
-            // 如果 token 不匹配 (例如使用了自定義 Firebase Config)，則降級為匿名登入
-            console.warn("Custom token auth failed (likely config mismatch), falling back to anonymous:", tokenError);
-            await signInAnonymously(auth);
-          }
-        } else {
-          await signInAnonymously(auth);
-        }
-      } catch (error) {
-        console.error("Auth Error:", error);
-      }
-    };
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
-    return () => unsubscribe();
-  }, []);
-
-  // --- Effect: Firestore Data Sync (Read) ---
-  useEffect(() => {
-    if (!user) return;
-
-    // 監聽單一文件以簡化同步邏輯 (適合個人行程應用)
-    const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'userData', 'main');
-    
-    const unsubscribe = onSnapshot(docRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        // 標記這是一次遠端更新，避免觸發 useEffect 的自動儲存
-        isRemoteUpdate.current = true;
-        
-        if (data.trips) setTrips(data.trips);
-        if (data.packingList) setPackingList(data.packingList);
-        if (data.memos) setMemos(data.memos);
-        if (data.coupons) setCoupons(data.coupons);
-        
-        // 如果本地沒有選中的行程，但雲端有，則選中第一個
-        if (!selectedTripId && data.trips && data.trips.length > 0) {
-           setSelectedTripId(data.trips[0].id);
-        }
-        
-        // 重置標記 (使用 setTimeout 確保本次 render 週期結束)
-        setTimeout(() => { isRemoteUpdate.current = false; }, 100);
-      } else {
-        // 如果是新用戶，且本地有預設資料，則寫入初始化資料
-        if (trips.length === 0) {
-            generateItineraryDoc('北海道', 8, '2026-03-04', true);
-        }
-      }
-    }, (error) => {
-      console.error("Sync Error:", error);
-    });
-
-    return () => unsubscribe();
-  }, [user]);
-
-  // --- Function: Debounced Save to Cloud ---
-  const saveToCloud = useCallback((dataToSave) => {
-    if (!user) return;
-    setIsSaving(true);
-    
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-
-    saveTimeoutRef.current = setTimeout(async () => {
-      try {
-        const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'userData', 'main');
-        // 使用 merge: true 確保不會覆蓋其他欄位，但這裡我們同步整個主要狀態
-        await setDoc(docRef, dataToSave, { merge: true });
-        setIsSaving(false);
-      } catch (error) {
-        console.error("Save Error:", error);
-        setIsSaving(false);
-      }
-    }, 1500); // 1.5秒防抖動
-  }, [user]);
-
-  // --- Effect: Auto Save Trigger ---
-  useEffect(() => {
-    if (isRemoteUpdate.current || !user) return;
-    
-    // 當重要狀態改變時，觸發儲存
-    // 注意：trips 包含大量資料，這對於大型應用可能不理想，但在這裡為了便利性採用全量同步
-    saveToCloud({
-        trips,
-        packingList,
-        memos,
-        coupons
-    });
-  }, [trips, packingList, memos, coupons, saveToCloud, user]);
-
-
-  const handleCurrencyChange = (val) => {
-    setCurrency({ twd: val, jpy: Math.round(val / 0.21) });
-  };
-
-  // API 呼叫工具
-  const fetchGemini = async (prompt, systemPrompt = "") => {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-    let delay = 1000;
-    for (let i = 0; i < 5; i++) {
-      try {
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            systemInstruction: { parts: [{ text: systemPrompt }] },
-            generationConfig: { responseMimeType: "application/json" }
-          })
-        });
-        const data = await response.json();
-        return JSON.parse(data.candidates[0].content.parts[0].text);
-      } catch (error) {
-        if (i === 4) throw error;
-        await new Promise(r => setTimeout(r, delay));
-        delay *= 2;
+  <!-- React & ReactDOM (Import Map for Module resolution) -->
+  <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.330.0?bundle",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js",
+        "firebase/auth": "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js"
       }
     }
-  };
+  </script>
 
-  // --- 功能: 行程生成與管理 ---
-  const generateItineraryDoc = async (loc, days, start, isInitial = false) => {
-    setLoading(true);
-    setShowAddTrip(false);
-    try {
-      const systemPrompt = `你是一位日本旅遊專家。請為新婚夫婦規劃${start}開始的${days}天${loc}蜜月行程。輸出格式必須為 JSON 陣列，包含 day (數字), date (字串YYYY-MM-DD), title (當天主題), events (陣列，含 time, activity, location, note)。確保日期連續。`;
-      const prompt = `規劃${start}開始的${days}天${loc}蜜月行程，請安排浪漫、美食與代表性景點。`;
-      const result = await fetchGemini(prompt, systemPrompt);
-      
-      const newTrip = {
-        id: Date.now(),
-        location: loc,
-        days: days,
-        startDate: start,
-        itineraryData: result
+  <style>
+    /* Custom scrollbar hiding for clean UI */
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+    .no-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+    .safe-area-bottom {
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    body {
+        background-color: #fdf2f8; /* pink-50 */
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" data-type="module">
+    import React, { useState, useEffect, useRef, useCallback } from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { 
+      Calendar, MapPin, Utensils, CloudSun, ClipboardList, Ticket, 
+      Plus, Trash2, Navigation, Heart, Edit2, CheckCircle, 
+      ExternalLink, Loader2, RefreshCw, Image as ImageIcon, X,
+      Languages, Sparkles, Cloud, Save
+    } from 'lucide-react';
+
+    // --- Firebase Imports ---
+    import { initializeApp } from 'firebase/app';
+    import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+    import { getFirestore, doc, setDoc, onSnapshot, collection } from 'firebase/firestore';
+
+    // --- Configuration ---
+    const apiKey = "AIzaSyBbntGqc70xYx8h1g3nGhrOiLHhuF8W10w";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBFu36_wc5-5cOWOppnfQpQ1l27fRH1mOU",
+      authDomain: "travel-5f00e.firebaseapp.com",
+      projectId: "travel-5f00e",
+      storageBucket: "travel-5f00e.firebasestorage.app",
+      messagingSenderId: "235781447903",
+      appId: "1:235781447903:web:ac6df0a4c41cabf18c096a",
+      measurementId: "G-S4N7CJ9WC8"
+    };
+
+    // --- Firebase Initialization ---
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    
+    // 如果沒有外部傳入 app_id，使用預設值
+    const appId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'default-honeymoon-app';
+
+    const App = () => {
+      const [activeTab, setActiveTab] = useState('planner');
+      const [loading, setLoading] = useState(false);
+      const [currency, setCurrency] = useState({ twd: 100, jpy: 0 });
+
+      // --- State: User & Cloud ---
+      const [user, setUser] = useState(null);
+      const [isSaving, setIsSaving] = useState(false);
+      const isRemoteUpdate = useRef(false);
+      const saveTimeoutRef = useRef(null);
+
+      // --- State: 行程管理 ---
+      const [trips, setTrips] = useState([]);
+      const [selectedTripId, setSelectedTripId] = useState(null);
+      const [showAddTrip, setShowAddTrip] = useState(false);
+      const [newTripForm, setNewTripForm] = useState({ location: '北海道', days: 8, startDate: '2026-03-04' });
+
+      // --- State: 準備清單 ---
+      const [memos, setMemos] = useState([]);
+      const [packingList, setPackingList] = useState([
+        { id: 1, text: '護照與機票', checked: false },
+        { id: 2, text: '發熱衣與保暖外套 (3月仍冷)', checked: false },
+        { id: 3, text: '日幣現金與信用卡', checked: false },
+        { id: 4, text: '行動電源與轉接頭', checked: false },
+      ]);
+      const [newItemText, setNewItemText] = useState('');
+      const [suggestingItems, setSuggestingItems] = useState(false);
+
+      // --- State: 優惠券 ---
+      const [coupons, setCoupons] = useState([
+        { id: 1, title: 'Bic Camera 7%折扣', code: 'BC2024', description: '電器免稅用', image: null }
+      ]);
+      const [showAddCoupon, setShowAddCoupon] = useState(false);
+      const [newCouponForm, setNewCouponForm] = useState({ title: '', code: '', description: '', image: null });
+      const fileInputRef = useRef(null);
+
+      // --- State: 美食與定位 ---
+      const [location, setLocation] = useState(null);
+      const [nearbyFood, setNearbyFood] = useState([]);
+
+      // --- State: AI 翻譯 ---
+      const [transInput, setTransInput] = useState('');
+      const [transResult, setTransResult] = useState(null);
+      const [translating, setTranslating] = useState(false);
+
+      // --- Effect: 初始化匯率 ---
+      useEffect(() => {
+        setCurrency(prev => ({ ...prev, jpy: Math.round(prev.twd / 0.21) }));
+      }, []);
+
+      // --- Effect: Firebase Authentication ---
+      useEffect(() => {
+        const initAuth = async () => {
+          try {
+            if (typeof window.__initial_auth_token !== 'undefined' && window.__initial_auth_token) {
+              try {
+                await signInWithCustomToken(auth, window.__initial_auth_token);
+              } catch (tokenError) {
+                console.warn("Custom token auth failed, falling back to anonymous:", tokenError);
+                await signInAnonymously(auth);
+              }
+            } else {
+              await signInAnonymously(auth);
+            }
+          } catch (error) {
+            console.error("Auth Error:", error);
+          }
+        };
+        initAuth();
+        const unsubscribe = onAuthStateChanged(auth, setUser);
+        return () => unsubscribe();
+      }, []);
+
+      // --- Effect: Firestore Data Sync (Read) ---
+      useEffect(() => {
+        if (!user) return;
+
+        const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'userData', 'main');
+        
+        const unsubscribe = onSnapshot(docRef, (docSnap) => {
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            isRemoteUpdate.current = true;
+            
+            if (data.trips) setTrips(data.trips);
+            if (data.packingList) setPackingList(data.packingList);
+            if (data.memos) setMemos(data.memos);
+            if (data.coupons) setCoupons(data.coupons);
+            
+            if (!selectedTripId && data.trips && data.trips.length > 0) {
+               setSelectedTripId(data.trips[0].id);
+            }
+            
+            setTimeout(() => { isRemoteUpdate.current = false; }, 100);
+          } else {
+            if (trips.length === 0) {
+                generateItineraryDoc('北海道', 8, '2026-03-04', true);
+            }
+          }
+        }, (error) => {
+          console.error("Sync Error:", error);
+        });
+
+        return () => unsubscribe();
+      }, [user]);
+
+      // --- Function: Debounced Save to Cloud ---
+      const saveToCloud = useCallback((dataToSave) => {
+        if (!user) return;
+        setIsSaving(true);
+        
+        if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+
+        saveTimeoutRef.current = setTimeout(async () => {
+          try {
+            const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'userData', 'main');
+            await setDoc(docRef, dataToSave, { merge: true });
+            setIsSaving(false);
+          } catch (error) {
+            console.error("Save Error:", error);
+            setIsSaving(false);
+          }
+        }, 1500);
+      }, [user]);
+
+      // --- Effect: Auto Save Trigger ---
+      useEffect(() => {
+        if (isRemoteUpdate.current || !user) return;
+        
+        saveToCloud({
+            trips,
+            packingList,
+            memos,
+            coupons
+        });
+      }, [trips, packingList, memos, coupons, saveToCloud, user]);
+
+
+      const handleCurrencyChange = (val) => {
+        setCurrency({ twd: val, jpy: Math.round(val / 0.21) });
       };
 
-      setTrips(prev => {
-          const newTrips = [...prev, newTrip];
-          if (isInitial) {
-             // 立即儲存初始狀態
-             saveToCloud({ trips: newTrips }); 
+      // API 呼叫工具
+      const fetchGemini = async (prompt, systemPrompt = "") => {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+        let delay = 1000;
+        for (let i = 0; i < 5; i++) {
+          try {
+            const response = await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+                generationConfig: { responseMimeType: "application/json" }
+              })
+            });
+            const data = await response.json();
+            return JSON.parse(data.candidates[0].content.parts[0].text);
+          } catch (error) {
+            if (i === 4) throw error;
+            await new Promise(r => setTimeout(r, delay));
+            delay *= 2;
           }
-          return newTrips;
-      });
-      setSelectedTripId(newTrip.id);
-      if (isInitial) setNewTripForm({ location: '', days: 5, startDate: '' }); 
+        }
+      };
 
-    } catch (error) {
-      console.error("生成失敗", error);
-      alert("行程生成失敗，請稍後再試。");
-    } finally {
-      setLoading(false);
-    }
-  };
+      // --- 功能: 行程生成與管理 ---
+      const generateItineraryDoc = async (loc, days, start, isInitial = false) => {
+        setLoading(true);
+        setShowAddTrip(false);
+        try {
+          const systemPrompt = `你是一位日本旅遊專家。請為新婚夫婦規劃${start}開始的${days}天${loc}蜜月行程。輸出格式必須為 JSON 陣列，包含 day (數字), date (字串YYYY-MM-DD), title (當天主題), events (陣列，含 time, activity, location, note)。確保日期連續。`;
+          const prompt = `規劃${start}開始的${days}天${loc}蜜月行程，請安排浪漫、美食與代表性景點。`;
+          const result = await fetchGemini(prompt, systemPrompt);
+          
+          const newTrip = {
+            id: Date.now(),
+            location: loc,
+            days: days,
+            startDate: start,
+            itineraryData: result
+          };
 
-  const updateEvent = (tripId, dayIdx, eventIdx, field, value) => {
-    setTrips(prevTrips => prevTrips.map(trip => {
-      if (trip.id === tripId) {
-        const newItineraryData = [...trip.itineraryData];
-        newItineraryData[dayIdx].events[eventIdx][field] = value;
-        return { ...trip, itineraryData: newItineraryData };
+          setTrips(prev => {
+              const newTrips = [...prev, newTrip];
+              if (isInitial) {
+                 saveToCloud({ trips: newTrips }); 
+              }
+              return newTrips;
+          });
+          setSelectedTripId(newTrip.id);
+          if (isInitial) setNewTripForm({ location: '', days: 5, startDate: '' }); 
+
+        } catch (error) {
+          console.error("生成失敗", error);
+          alert("行程生成失敗，請稍後再試。");
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const updateEvent = (tripId, dayIdx, eventIdx, field, value) => {
+        setTrips(prevTrips => prevTrips.map(trip => {
+          if (trip.id === tripId) {
+            const newItineraryData = [...trip.itineraryData];
+            newItineraryData[dayIdx].events[eventIdx][field] = value;
+            return { ...trip, itineraryData: newItineraryData };
+          }
+          return trip;
+        }));
+      };
+
+      const deleteTrip = (tripId) => {
+        setTrips(prev => prev.filter(t => t.id !== tripId));
+        if (selectedTripId === tripId) {
+            setSelectedTripId(null);
+        }
       }
-      return trip;
-    }));
-  };
 
-  const deleteTrip = (tripId) => {
-    setTrips(prev => prev.filter(t => t.id !== tripId));
-    if (selectedTripId === tripId) {
-        setSelectedTripId(null);
-    }
-  }
+      // --- 功能: 準備清單管理 ---
+      const addPackingItem = () => {
+        if (newItemText.trim() === '') return;
+        setPackingList([...packingList, { id: Date.now(), text: newItemText, checked: false }]);
+        setNewItemText('');
+      };
 
+      const deletePackingItem = (id) => {
+        setPackingList(packingList.filter(item => item.id !== id));
+      };
 
-  // --- 功能: 準備清單管理 (含 AI 推薦) ---
-  const addPackingItem = () => {
-    if (newItemText.trim() === '') return;
-    setPackingList([...packingList, { id: Date.now(), text: newItemText, checked: false }]);
-    setNewItemText('');
-  };
+      const suggestPackingItems = async () => {
+        const trip = trips.find(t => t.id === selectedTripId);
+        const loc = trip ? trip.location : '日本';
+        const date = trip ? trip.startDate : '3月';
 
-  const deletePackingItem = (id) => {
-    setPackingList(packingList.filter(item => item.id !== id));
-  };
+        setSuggestingItems(true);
+        try {
+          const prompt = `我要去${loc}旅行，出發日期是${date}。請根據當地氣候和蜜月旅行需求，推薦 3-5 個「非基本款但很重要」的必備物品（例如雪地防滑、特殊保養品等）。不要重複護照、錢、機票。回傳純 JSON 字串陣列 (Array of strings)。`;
+          const items = await fetchGemini(prompt);
+          
+          const newItems = items.map(text => ({
+            id: Date.now() + Math.random(),
+            text: text,
+            checked: false
+          }));
+          setPackingList(prev => [...prev, ...newItems]);
+        } catch (error) {
+          console.error("AI 推薦失敗", error);
+          alert("AI 暫時無法推薦，請稍後再試。");
+        } finally {
+          setSuggestingItems(false);
+        }
+      };
 
-  const suggestPackingItems = async () => {
-    const trip = trips.find(t => t.id === selectedTripId);
-    const loc = trip ? trip.location : '日本';
-    const date = trip ? trip.startDate : '3月';
+      // --- 功能: 優惠券管理 ---
+      const handleImageUpload = (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          // 注意：在純 HTML 檔案中，Blob URL 在重新整理後會失效。
+          // 為了持久化，這裡需要轉換為 Base64 (但受限於 Firestore 文件大小限制，這邊僅作演示，實務上應上傳至 Storage)
+          // 為了簡單起見，這裡還是使用 ObjectURL，但請注意重新整理後圖片會消失。
+          // 若要解決此問題，需實作 Firebase Storage 上傳邏輯。
+          const imageUrl = URL.createObjectURL(file);
+          setNewCouponForm(prev => ({ ...prev, image: imageUrl }));
+        }
+      };
 
-    setSuggestingItems(true);
-    try {
-      const prompt = `我要去${loc}旅行，出發日期是${date}。請根據當地氣候和蜜月旅行需求，推薦 3-5 個「非基本款但很重要」的必備物品（例如雪地防滑、特殊保養品等）。不要重複護照、錢、機票。回傳純 JSON 字串陣列 (Array of strings)。`;
-      const items = await fetchGemini(prompt);
-      
-      const newItems = items.map(text => ({
-        id: Date.now() + Math.random(),
-        text: text,
-        checked: false
-      }));
-      setPackingList(prev => [...prev, ...newItems]);
-    } catch (error) {
-      console.error("AI 推薦失敗", error);
-      alert("AI 暫時無法推薦，請稍後再試。");
-    } finally {
-      setSuggestingItems(false);
-    }
-  };
+      const addCoupon = () => {
+        if (newCouponForm.title.trim() === '') {
+            alert("請輸入優惠券標題");
+            return;
+        }
+        setCoupons([...coupons, { id: Date.now(), ...newCouponForm }]);
+        setNewCouponForm({ title: '', code: '', description: '', image: null });
+        setShowAddCoupon(false);
+      };
 
-
-  // --- 功能: 優惠券管理 (含圖片) ---
-  const handleImageUpload = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      const imageUrl = URL.createObjectURL(file);
-      setNewCouponForm(prev => ({ ...prev, image: imageUrl }));
-    }
-  };
-
-  const addCoupon = () => {
-    if (newCouponForm.title.trim() === '') {
-        alert("請輸入優惠券標題");
-        return;
-    }
-    setCoupons([...coupons, { id: Date.now(), ...newCouponForm }]);
-    setNewCouponForm({ title: '', code: '', description: '', image: null });
-    setShowAddCoupon(false);
-  };
-
-  const deleteCoupon = (id) => {
-      setCoupons(coupons.filter(c => c.id !== id));
-  }
-
-
-  // --- 功能: 美食搜尋 ---
-  const getNearbyFood = async () => {
-    if (!navigator.geolocation) {
-        alert("您的瀏覽器不支援地理位置功能。");
-        return;
-    }
-    setLoading(true);
-    navigator.geolocation.getCurrentPosition(async (pos) => {
-      const { latitude, longitude } = pos.coords;
-      setLocation({ lat: latitude, lng: longitude });
-      try {
-        const prompt = `我目前位於經緯度 (${latitude}, ${longitude})。請推薦附近5間評分高的美食餐廳。輸出 JSON 陣列，包含 name, rating, type, reason, address。`;
-        const result = await fetchGemini(prompt, "你是一位專業的美食評論家。");
-        setNearbyFood(result);
-      } catch (error) {
-        console.error("美食搜尋失敗", error);
-        alert("無法獲取美食資訊。");
-      } finally {
-        setLoading(false);
+      const deleteCoupon = (id) => {
+          setCoupons(coupons.filter(c => c.id !== id));
       }
-    }, (err) => {
-        console.error(err);
-        setLoading(false);
-        alert("無法獲取您的位置，請確保已授權定位功能。");
-    });
-  };
 
-  // --- 功能: AI 翻譯 ---
-  const handleTranslate = async () => {
-    if (!transInput.trim()) return;
-    setTranslating(true);
-    try {
-      const prompt = `Translate the following sentence to natural, polite Japanese suitable for a tourist speaking to locals. Also provide the Romaji pronunciation. Sentence: "${transInput}". Output JSON: { "japanese": "...", "romaji": "..." }`;
-      const result = await fetchGemini(prompt);
-      setTransResult(result);
-    } catch (error) {
-      console.error("翻譯失敗", error);
-    } finally {
-      setTranslating(false);
-    }
-  };
+      // --- 功能: 美食搜尋 ---
+      const getNearbyFood = async () => {
+        if (!navigator.geolocation) {
+            alert("您的瀏覽器不支援地理位置功能。");
+            return;
+        }
+        setLoading(true);
+        navigator.geolocation.getCurrentPosition(async (pos) => {
+          const { latitude, longitude } = pos.coords;
+          setLocation({ lat: latitude, lng: longitude });
+          try {
+            const prompt = `我目前位於經緯度 (${latitude}, ${longitude})。請推薦附近5間評分高的美食餐廳。輸出 JSON 陣列，包含 name, rating, type, reason, address。`;
+            const result = await fetchGemini(prompt, "你是一位專業的美食評論家。");
+            setNearbyFood(result);
+          } catch (error) {
+            console.error("美食搜尋失敗", error);
+            alert("無法獲取美食資訊。");
+          } finally {
+            setLoading(false);
+          }
+        }, (err) => {
+            console.error(err);
+            setLoading(false);
+            alert("無法獲取您的位置，請確保已授權定位功能。");
+        });
+      };
 
+      // --- 功能: AI 翻譯 ---
+      const handleTranslate = async () => {
+        if (!transInput.trim()) return;
+        setTranslating(true);
+        try {
+          const prompt = `Translate the following sentence to natural, polite Japanese suitable for a tourist speaking to locals. Also provide the Romaji pronunciation. Sentence: "${transInput}". Output JSON: { "japanese": "...", "romaji": "..." }`;
+          const result = await fetchGemini(prompt);
+          setTransResult(result);
+        } catch (error) {
+          console.error("翻譯失敗", error);
+        } finally {
+          setTranslating(false);
+        }
+      };
 
-  const currentTrip = trips.find(t => t.id === selectedTripId);
+      const currentTrip = trips.find(t => t.id === selectedTripId);
 
-  return (
-    <div className="min-h-screen bg-pink-50 text-slate-800 pb-24 font-sans">
-      <header className="bg-white border-b p-4 text-center sticky top-0 z-50 shadow-sm">
-        <h1 className="text-xl font-bold flex items-center justify-center gap-2 text-pink-600">
-          <Heart className="fill-pink-600 w-5 h-5" /> 蜜月行程管家
-          {isSaving && <Cloud className="w-4 h-4 text-slate-300 animate-pulse ml-2" />}
-        </h1>
-        {user && <p className="text-[10px] text-slate-400 mt-1">雲端同步中 (ID: {user.uid.slice(0, 6)}...)</p>}
-      </header>
+      return (
+        <div className="min-h-screen text-slate-800 pb-24 font-sans">
+          <header className="bg-white border-b p-4 text-center sticky top-0 z-50 shadow-sm">
+            <h1 className="text-xl font-bold flex items-center justify-center gap-2 text-pink-600">
+              <Heart className="fill-pink-600 w-5 h-5" /> 蜜月行程管家
+              {isSaving && <Cloud className="w-4 h-4 text-slate-300 animate-pulse ml-2" />}
+            </h1>
+            {user && <p className="text-[10px] text-slate-400 mt-1">雲端同步中 (ID: {user.uid.slice(0, 6)}...)</p>}
+          </header>
 
-      <main className="max-w-4xl mx-auto p-4">
-        
-        {/* --- Tab 1: 行程規劃 --- */}
-        {activeTab === 'planner' && (
-          <div className="space-y-4 animate-in fade-in duration-500">
+          <main className="max-w-4xl mx-auto p-4">
             
-            {/* 行程選擇器與新增按鈕 */}
-            <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
-                {trips.map(trip => (
-                    <button
-                        key={trip.id}
-                        onClick={() => setSelectedTripId(trip.id)}
-                        className={`flex-shrink-0 px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 transition ${selectedTripId === trip.id ? 'bg-pink-500 text-white shadow-md' : 'bg-white text-slate-600 border border-pink-100'}`}
-                    >
-                        {trip.location} ({trip.days}天)
-                        {selectedTripId === trip.id && <X className="w-3 h-3 opacity-70 hover:opacity-100" onClick={(e) => { e.stopPropagation(); deleteTrip(trip.id); }} />}
-                    </button>
-                ))}
-                <button 
-                    onClick={() => setShowAddTrip(true)}
-                    className="flex-shrink-0 px-3 py-2 rounded-full bg-pink-100 text-pink-600 text-sm font-medium flex items-center gap-1 hover:bg-pink-200 transition"
-                >
-                    <Plus className="w-4 h-4" /> 新增城市行程
-                </button>
-            </div>
-
-            {/* 新增行程表單 */}
-            {showAddTrip && (
-                <div className="bg-white p-4 rounded-2xl shadow border border-pink-200 mb-4 animate-in slide-in-from-top-5">
-                    <h3 className="font-bold text-pink-700 mb-3">規劃新的城市旅程</h3>
-                    <div className="grid gap-3 sm:grid-cols-3 mb-3">
-                        <input type="text" placeholder="城市/地區 (例: 福岡)" value={newTripForm.location} onChange={e => setNewTripForm({...newTripForm, location: e.target.value})} className="p-2 border rounded-xl text-sm" />
-                        <input type="number" placeholder="天數" value={newTripForm.days} onChange={e => setNewTripForm({...newTripForm, days: e.target.value})} className="p-2 border rounded-xl text-sm" />
-                        <input type="date" value={newTripForm.startDate} onChange={e => setNewTripForm({...newTripForm, startDate: e.target.value})} className="p-2 border rounded-xl text-sm text-slate-500" />
-                    </div>
-                    <div className="flex justify-end gap-2">
-                        <button onClick={() => setShowAddTrip(false)} className="px-3 py-1.5 text-sm text-slate-500">取消</button>
-                        <button 
-                            onClick={() => generateItineraryDoc(newTripForm.location, newTripForm.days, newTripForm.startDate)}
-                            disabled={loading || !newTripForm.location || !newTripForm.startDate}
-                            className="bg-pink-500 text-white px-4 py-1.5 rounded-full text-sm flex items-center gap-2 disabled:opacity-50"
+            {/* --- Tab 1: 行程規劃 --- */}
+            {activeTab === 'planner' && (
+              <div className="space-y-4 animate-in fade-in duration-500">
+                <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
+                    {trips.map(trip => (
+                        <button
+                            key={trip.id}
+                            onClick={() => setSelectedTripId(trip.id)}
+                            className={`flex-shrink-0 px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 transition ${selectedTripId === trip.id ? 'bg-pink-500 text-white shadow-md' : 'bg-white text-slate-600 border border-pink-100'}`}
                         >
-                            {loading ? <Loader2 className="animate-spin w-4 h-4" /> : <RefreshCw className="w-4 h-4" />} AI 生成
+                            {trip.location} ({trip.days}天)
+                            {selectedTripId === trip.id && <X className="w-3 h-3 opacity-70 hover:opacity-100" onClick={(e) => { e.stopPropagation(); deleteTrip(trip.id); }} />}
                         </button>
-                    </div>
+                    ))}
+                    <button 
+                        onClick={() => setShowAddTrip(true)}
+                        className="flex-shrink-0 px-3 py-2 rounded-full bg-pink-100 text-pink-600 text-sm font-medium flex items-center gap-1 hover:bg-pink-200 transition"
+                    >
+                        <Plus className="w-4 h-4" /> 新增城市行程
+                    </button>
                 </div>
+
+                {showAddTrip && (
+                    <div className="bg-white p-4 rounded-2xl shadow border border-pink-200 mb-4 animate-in slide-in-from-top-5">
+                        <h3 className="font-bold text-pink-700 mb-3">規劃新的城市旅程</h3>
+                        <div className="grid gap-3 sm:grid-cols-3 mb-3">
+                            <input type="text" placeholder="城市/地區 (例: 福岡)" value={newTripForm.location} onChange={e => setNewTripForm({...newTripForm, location: e.target.value})} className="p-2 border rounded-xl text-sm" />
+                            <input type="number" placeholder="天數" value={newTripForm.days} onChange={e => setNewTripForm({...newTripForm, days: e.target.value})} className="p-2 border rounded-xl text-sm" />
+                            <input type="date" value={newTripForm.startDate} onChange={e => setNewTripForm({...newTripForm, startDate: e.target.value})} className="p-2 border rounded-xl text-sm text-slate-500" />
+                        </div>
+                        <div className="flex justify-end gap-2">
+                            <button onClick={() => setShowAddTrip(false)} className="px-3 py-1.5 text-sm text-slate-500">取消</button>
+                            <button 
+                                onClick={() => generateItineraryDoc(newTripForm.location, newTripForm.days, newTripForm.startDate)}
+                                disabled={loading || !newTripForm.location || !newTripForm.startDate}
+                                className="bg-pink-500 text-white px-4 py-1.5 rounded-full text-sm flex items-center gap-2 disabled:opacity-50"
+                            >
+                                {loading ? <Loader2 className="animate-spin w-4 h-4" /> : <RefreshCw className="w-4 h-4" />} AI 生成
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {currentTrip ? (
+                  currentTrip.itineraryData.map((day, dIdx) => (
+                    <div key={day.date} className="bg-white rounded-2xl shadow-sm border border-pink-100 overflow-hidden">
+                      <div className="bg-pink-50 p-3 border-b border-pink-100 flex justify-between items-center">
+                        <h3 className="font-bold text-pink-800 flex flex-col sm:flex-row sm:gap-2">
+                            <span>Day {day.day}</span>
+                            <span className="text-sm font-normal text-pink-600">{day.date} - {day.title}</span>
+                        </h3>
+                      </div>
+                      <div className="p-3 space-y-3">
+                        {day.events.map((event, eIdx) => (
+                          <div key={eIdx} className="flex gap-3 group relative">
+                            <div className="w-14 flex-shrink-0 pt-1">
+                              <input 
+                                type="text" 
+                                value={event.time} 
+                                onChange={(e) => updateEvent(currentTrip.id, dIdx, eIdx, 'time', e.target.value)}
+                                className="text-xs font-bold text-pink-500 bg-pink-50/50 rounded px-1 w-full text-center focus:outline-none focus:ring-1 focus:ring-pink-300 transition-shadow"
+                              />
+                            </div>
+                            <div className="flex flex-col items-center relative">
+                                <div className="w-3 h-3 rounded-full bg-pink-400 border-2 border-white shadow-sm z-10 mt-1.5"></div>
+                                {eIdx < day.events.length - 1 && <div className="w-0.5 flex-grow bg-pink-100 absolute top-4 bottom-0"></div>}
+                            </div>
+                            <div className="flex-grow pb-2 space-y-1 pt-0.5">
+                              <input 
+                                type="text" 
+                                value={event.activity} 
+                                onChange={(e) => updateEvent(currentTrip.id, dIdx, eIdx, 'activity', e.target.value)}
+                                className="w-full font-bold text-slate-700 focus:outline-none border-b border-transparent focus:border-pink-200"
+                              />
+                              <div className="flex items-center gap-1 text-xs text-blue-500">
+                                <button 
+                                    onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.location)}`, '_blank')}
+                                    title="在 Google 地圖中開啟"
+                                    className="hover:scale-110 transition flex-shrink-0"
+                                >
+                                    <MapPin className="w-3 h-3" />
+                                </button>
+                                <input 
+                                    type="text"
+                                    value={event.location}
+                                    onChange={(e) => updateEvent(currentTrip.id, dIdx, eIdx, 'location', e.target.value)}
+                                    className="w-full bg-transparent focus:outline-none border-b border-transparent focus:border-pink-200 text-blue-500 placeholder-blue-300"
+                                    placeholder="輸入地點..."
+                                />
+                                <button 
+                                    onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.location)}`, '_blank')}
+                                    title="在 Google 地圖中開啟"
+                                    className="opacity-0 group-hover:opacity-100 transition flex-shrink-0 hover:text-blue-700"
+                                >
+                                    <ExternalLink className="w-3 h-3" />
+                                </button>
+                              </div>
+                              <textarea 
+                                value={event.note} 
+                                onChange={(e) => updateEvent(currentTrip.id, dIdx, eIdx, 'note', e.target.value)}
+                                placeholder="新增備註..."
+                                className="w-full text-xs text-slate-500 focus:outline-none bg-slate-50 p-1 rounded resize-none overflow-hidden min-h-[1.5rem]"
+                                rows="1"
+                                onInput={(e) => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  !loading && trips.length > 0 && <div className="text-center text-slate-500 py-10">請選擇一個行程查看</div>
+                )}
+                
+                {!loading && trips.length === 0 && (
+                    <div className="text-center text-slate-400 py-10 bg-white rounded-2xl border-2 border-dashed border-pink-200">
+                        點擊上方「新增城市行程」開始規劃
+                    </div>
+                )}
+              </div>
             )}
 
-            {/* 行程內容顯示 */}
-            {currentTrip ? (
-              currentTrip.itineraryData.map((day, dIdx) => (
-                <div key={day.date} className="bg-white rounded-2xl shadow-sm border border-pink-100 overflow-hidden">
-                  <div className="bg-pink-50 p-3 border-b border-pink-100 flex justify-between items-center">
-                    <h3 className="font-bold text-pink-800 flex flex-col sm:flex-row sm:gap-2">
-                        <span>Day {day.day}</span>
-                        <span className="text-sm font-normal text-pink-600">{day.date} - {day.title}</span>
-                    </h3>
+            {/* --- Tab 2: 美食導航 --- */}
+            {activeTab === 'food' && (
+              <div className="space-y-4 animate-in slide-in-from-right duration-300">
+                <div className="bg-white p-5 rounded-2xl shadow-sm space-y-3 text-center relative overflow-hidden">
+                  <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-orange-300 to-orange-500"></div>
+                  <h2 className="text-lg font-bold flex items-center justify-center gap-2 text-orange-600"><Utensils className="w-5 h-5" /> 附近美食探索</h2>
+                  <p className="text-xs text-slate-500">到達新地點了嗎？抓取 GPS 找出周邊高評分美食！</p>
+                  <button 
+                    onClick={getNearbyFood}
+                    disabled={loading}
+                    className="w-full bg-gradient-to-r from-orange-400 to-orange-500 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition active:scale-95 disabled:opacity-70"
+                  >
+                    {loading ? <Loader2 className="animate-spin" /> : <Navigation className="w-5 h-5" />}
+                    搜尋附近美食
+                  </button>
+                </div>
+
+                <div className="grid gap-3">
+                  {nearbyFood.map((food, idx) => (
+                    <div key={idx} className="bg-white p-3 rounded-2xl shadow-sm flex gap-3 border-l-4 border-orange-400 transition hover:-translate-y-1">
+                      <div className="flex-grow">
+                        <div className="flex justify-between items-start">
+                          <h3 className="font-bold text-slate-800">{food.name}</h3>
+                          <span className="text-orange-500 font-extrabold flex items-center gap-1 text-sm">★ {food.rating}</span>
+                        </div>
+                        <p className="text-xs text-slate-500 mb-1">{food.type} · <span className="italic">「{food.reason}」</span></p>
+                        <button 
+                          onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(food.name + ' ' + food.address)}`, '_blank')}
+                          className="text-xs text-blue-500 flex items-center gap-1 hover:underline bg-blue-50 px-2 py-1 rounded-full w-fit mt-2"
+                        >
+                          <MapPin className="w-3 h-3" /> 導航至：{food.address}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* --- Tab 3: 準備與筆記 --- */}
+            {activeTab === 'prep' && (
+              <div className="space-y-6 animate-in slide-in-from-right duration-300">
+                <section className="bg-gradient-to-br from-blue-400 to-blue-600 rounded-2xl p-5 text-white shadow-md relative overflow-hidden">
+                  <CloudSun className="absolute right-[-20px] top-[-20px] w-24 h-24 opacity-20" />
+                  <h2 className="text-lg font-bold mb-2 flex items-center gap-2">3月日本氣候參考 (以北海道為例)</h2>
+                  <p className="text-sm opacity-90 mb-4">平均 -3°C ~ 8°C，仍需禦寒保暖。</p>
+                  <div className="flex gap-3 text-xs font-medium">
+                    <span className="bg-white/20 px-3 py-1 rounded-full backdrop-blur-sm">洋蔥式穿法</span>
+                    <span className="bg-white/20 px-3 py-1 rounded-full backdrop-blur-sm">防滑鞋/雪靴</span>
+                    <span className="bg-white/20 px-3 py-1 rounded-full backdrop-blur-sm">保濕用品</span>
                   </div>
-                  <div className="p-3 space-y-3">
-                    {day.events.map((event, eIdx) => (
-                      <div key={eIdx} className="flex gap-3 group relative">
-                        {/* Time Input */}
-                        <div className="w-14 flex-shrink-0 pt-1">
-                          <input 
-                            type="text" 
-                            value={event.time} 
-                            onChange={(e) => updateEvent(currentTrip.id, dIdx, eIdx, 'time', e.target.value)}
-                            className="text-xs font-bold text-pink-500 bg-pink-50/50 rounded px-1 w-full text-center focus:outline-none focus:ring-1 focus:ring-pink-300 transition-shadow"
-                          />
-                        </div>
-                        {/* Timeline Connector */}
-                        <div className="flex flex-col items-center relative">
-                            <div className="w-3 h-3 rounded-full bg-pink-400 border-2 border-white shadow-sm z-10 mt-1.5"></div>
-                            {eIdx < day.events.length - 1 && <div className="w-0.5 flex-grow bg-pink-100 absolute top-4 bottom-0"></div>}
-                        </div>
-                        {/* Content */}
-                        <div className="flex-grow pb-2 space-y-1 pt-0.5">
-                          <input 
-                            type="text" 
-                            value={event.activity} 
-                            onChange={(e) => updateEvent(currentTrip.id, dIdx, eIdx, 'activity', e.target.value)}
-                            className="w-full font-bold text-slate-700 focus:outline-none border-b border-transparent focus:border-pink-200"
-                          />
-                          <div className="flex items-center gap-1 text-xs text-blue-500">
-                            <button 
-                                onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.location)}`, '_blank')}
-                                title="在 Google 地圖中開啟"
-                                className="hover:scale-110 transition flex-shrink-0"
-                            >
-                                <MapPin className="w-3 h-3" />
-                            </button>
-                            <input 
-                                type="text"
-                                value={event.location}
-                                onChange={(e) => updateEvent(currentTrip.id, dIdx, eIdx, 'location', e.target.value)}
-                                className="w-full bg-transparent focus:outline-none border-b border-transparent focus:border-pink-200 text-blue-500 placeholder-blue-300"
-                                placeholder="輸入地點..."
-                            />
-                            <button 
-                                onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.location)}`, '_blank')}
-                                title="在 Google 地圖中開啟"
-                                className="opacity-0 group-hover:opacity-100 transition flex-shrink-0 hover:text-blue-700"
-                            >
-                                <ExternalLink className="w-3 h-3" />
-                            </button>
-                          </div>
-                          <textarea 
-                            value={event.note} 
-                            onChange={(e) => updateEvent(currentTrip.id, dIdx, eIdx, 'note', e.target.value)}
-                            placeholder="新增備註..."
-                            className="w-full text-xs text-slate-500 focus:outline-none bg-slate-50 p-1 rounded resize-none overflow-hidden min-h-[1.5rem]"
-                            rows="1"
-                            onInput={(e) => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; }}
-                          />
-                        </div>
+                </section>
+
+                <section className="bg-white rounded-2xl shadow-sm p-5 border border-slate-100">
+                  <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-lg font-bold flex items-center gap-2 text-green-700"><ClipboardList className="w-5 h-5" /> 行前準備清單</h2>
+                    <button 
+                      onClick={suggestPackingItems}
+                      disabled={suggestingItems}
+                      className="bg-green-50 text-green-600 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1 hover:bg-green-100 transition disabled:opacity-50"
+                    >
+                      {suggestingItems ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                      AI 推薦
+                    </button>
+                  </div>
+                  <div className="space-y-2 mb-4">
+                    {packingList.map(item => (
+                      <div key={item.id} className="flex items-center gap-3 group">
+                        <button 
+                          onClick={() => setPackingList(packingList.map(i => i.id === item.id ? {...i, checked: !i.checked} : i))}
+                          className={`w-5 h-5 rounded border-2 flex items-center justify-center transition ${item.checked ? 'bg-green-500 border-green-500 text-white' : 'border-slate-300'}`}
+                        >
+                          {item.checked && <CheckCircle className="w-3 h-3" />}
+                        </button>
+                        <span className={`flex-grow text-sm transition ${item.checked ? 'line-through text-slate-400' : 'text-slate-700'}`}>{item.text}</span>
+                        <button onClick={() => deletePackingItem(item.id)} className="text-slate-300 hover:text-red-500 p-1 opacity-0 group-hover:opacity-100 transition">
+                            <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     ))}
                   </div>
-                </div>
-              ))
-            ) : (
-              !loading && trips.length > 0 && <div className="text-center text-slate-500 py-10">請選擇一個行程查看</div>
-            )}
-            
-            {!loading && trips.length === 0 && (
-                <div className="text-center text-slate-400 py-10 bg-white rounded-2xl border-2 border-dashed border-pink-200">
-                    點擊上方「新增城市行程」開始規劃
-                </div>
-            )}
-          </div>
-        )}
-
-        {/* --- Tab 2: 美食導航 --- */}
-        {activeTab === 'food' && (
-          <div className="space-y-4 animate-in slide-in-from-right duration-300">
-            <div className="bg-white p-5 rounded-2xl shadow-sm space-y-3 text-center relative overflow-hidden">
-              <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-orange-300 to-orange-500"></div>
-              <h2 className="text-lg font-bold flex items-center justify-center gap-2 text-orange-600"><Utensils className="w-5 h-5" /> 附近美食探索</h2>
-              <p className="text-xs text-slate-500">到達新地點了嗎？抓取 GPS 找出周邊高評分美食！</p>
-              <button 
-                onClick={getNearbyFood}
-                disabled={loading}
-                className="w-full bg-gradient-to-r from-orange-400 to-orange-500 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition active:scale-95 disabled:opacity-70"
-              >
-                {loading ? <Loader2 className="animate-spin" /> : <Navigation className="w-5 h-5" />}
-                搜尋附近美食
-              </button>
-            </div>
-
-            <div className="grid gap-3">
-              {nearbyFood.map((food, idx) => (
-                <div key={idx} className="bg-white p-3 rounded-2xl shadow-sm flex gap-3 border-l-4 border-orange-400 transition hover:-translate-y-1">
-                  <div className="flex-grow">
-                    <div className="flex justify-between items-start">
-                      <h3 className="font-bold text-slate-800">{food.name}</h3>
-                      <span className="text-orange-500 font-extrabold flex items-center gap-1 text-sm">★ {food.rating}</span>
-                    </div>
-                    <p className="text-xs text-slate-500 mb-1">{food.type} · <span className="italic">「{food.reason}」</span></p>
-                    <button 
-                      onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(food.name + ' ' + food.address)}`, '_blank')}
-                      className="text-xs text-blue-500 flex items-center gap-1 hover:underline bg-blue-50 px-2 py-1 rounded-full w-fit mt-2"
-                    >
-                      <MapPin className="w-3 h-3" /> 導航至：{food.address}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* --- Tab 3: 準備與筆記 --- */}
-        {activeTab === 'prep' && (
-          <div className="space-y-6 animate-in slide-in-from-right duration-300">
-            {/* 氣候資訊 */}
-            <section className="bg-gradient-to-br from-blue-400 to-blue-600 rounded-2xl p-5 text-white shadow-md relative overflow-hidden">
-              <CloudSun className="absolute right-[-20px] top-[-20px] w-24 h-24 opacity-20" />
-              <h2 className="text-lg font-bold mb-2 flex items-center gap-2">3月日本氣候參考 (以北海道為例)</h2>
-              <p className="text-sm opacity-90 mb-4">平均 -3°C ~ 8°C，仍需禦寒保暖。</p>
-              <div className="flex gap-3 text-xs font-medium">
-                <span className="bg-white/20 px-3 py-1 rounded-full backdrop-blur-sm">洋蔥式穿法</span>
-                <span className="bg-white/20 px-3 py-1 rounded-full backdrop-blur-sm">防滑鞋/雪靴</span>
-                <span className="bg-white/20 px-3 py-1 rounded-full backdrop-blur-sm">保濕用品</span>
-              </div>
-            </section>
-
-            {/* 行前準備清單 (可新增刪除) */}
-            <section className="bg-white rounded-2xl shadow-sm p-5 border border-slate-100">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-bold flex items-center gap-2 text-green-700"><ClipboardList className="w-5 h-5" /> 行前準備清單</h2>
-                <button 
-                  onClick={suggestPackingItems}
-                  disabled={suggestingItems}
-                  className="bg-green-50 text-green-600 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1 hover:bg-green-100 transition disabled:opacity-50"
-                >
-                  {suggestingItems ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-                  AI 推薦
-                </button>
-              </div>
-              <div className="space-y-2 mb-4">
-                {packingList.map(item => (
-                  <div key={item.id} className="flex items-center gap-3 group">
-                    <button 
-                      onClick={() => setPackingList(packingList.map(i => i.id === item.id ? {...i, checked: !i.checked} : i))}
-                      className={`w-5 h-5 rounded border-2 flex items-center justify-center transition ${item.checked ? 'bg-green-500 border-green-500 text-white' : 'border-slate-300'}`}
-                    >
-                      {item.checked && <CheckCircle className="w-3 h-3" />}
-                    </button>
-                    <span className={`flex-grow text-sm transition ${item.checked ? 'line-through text-slate-400' : 'text-slate-700'}`}>{item.text}</span>
-                    <button onClick={() => deletePackingItem(item.id)} className="text-slate-300 hover:text-red-500 p-1 opacity-0 group-hover:opacity-100 transition">
-                        <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-              <div className="flex gap-2">
-                <input 
-                    type="text" 
-                    value={newItemText} 
-                    onChange={(e) => setNewItemText(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && addPackingItem()}
-                    placeholder="新增物品..." 
-                    className="flex-grow p-2 text-sm border rounded-xl focus:outline-none focus:border-green-400"
-                />
-                <button onClick={addPackingItem} className="bg-green-100 text-green-600 p-2 rounded-xl hover:bg-green-200 transition">
-                    <Plus className="w-5 h-5" />
-                </button>
-              </div>
-            </section>
-
-            {/* 旅遊備忘錄 */}
-            <section className="bg-white rounded-2xl shadow-sm p-5 border border-slate-100">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-bold flex items-center gap-2 text-purple-700"><Edit2 className="w-5 h-5" /> 旅遊備忘錄</h2>
-                <button 
-                  onClick={() => setMemos([...memos, { id: Date.now(), text: '' }])}
-                  className="p-2 bg-purple-100 text-purple-600 rounded-lg hover:bg-purple-200 transition"
-                >
-                  <Plus className="w-4 h-4" />
-                </button>
-              </div>
-              <div className="space-y-3">
-                {memos.map(memo => (
-                  <div key={memo.id} className="relative group">
-                    <textarea 
-                      placeholder="輸入心情、必買物或筆記..."
-                      value={memo.text}
-                      onChange={(e) => setMemos(memos.map(m => m.id === memo.id ? {...m, text: e.target.value} : m))}
-                      className="w-full p-3 bg-purple-50/50 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-200 resize-none min-h-[80px] border border-transparent focus:border-purple-200 transition"
+                  <div className="flex gap-2">
+                    <input 
+                        type="text" 
+                        value={newItemText} 
+                        onChange={(e) => setNewItemText(e.target.value)}
+                        onKeyPress={(e) => e.key === 'Enter' && addPackingItem()}
+                        placeholder="新增物品..." 
+                        className="flex-grow p-2 text-sm border rounded-xl focus:outline-none focus:border-green-400"
                     />
-                    <button 
-                      onClick={() => setMemos(memos.filter(m => m.id !== memo.id))}
-                      className="absolute top-2 right-2 p-1 text-purple-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition bg-white rounded-full shadow-sm"
-                    >
-                      <Trash2 className="w-3 h-3" />
+                    <button onClick={addPackingItem} className="bg-green-100 text-green-600 p-2 rounded-xl hover:bg-green-200 transition">
+                        <Plus className="w-5 h-5" />
                     </button>
                   </div>
-                ))}
-                {memos.length === 0 && <p className="text-center text-slate-400 text-sm py-4 bg-slate-50 rounded-xl border border-dashed">點擊「+」紀錄旅途點滴</p>}
-              </div>
-            </section>
-          </div>
-        )}
+                </section>
 
-        {/* --- Tab 4: 優惠券錢包 --- */}
-        {activeTab === 'coupons' && (
-          <div className="space-y-4 animate-in slide-in-from-right duration-300">
-            <div className="flex justify-between items-center">
-                <h2 className="text-lg font-bold flex items-center gap-2 text-red-600"><Ticket className="w-5 h-5" /> 優惠券錢包</h2>
-                <button onClick={() => setShowAddCoupon(true)} className="bg-red-100 text-red-600 px-3 py-1.5 rounded-full text-sm font-medium flex items-center gap-1 hover:bg-red-200 transition">
-                    <Plus className="w-4 h-4" /> 新增優惠券
-                </button>
-            </div>
-            
-            {/* 新增優惠券 Modal */}
-            {showAddCoupon && (
-                <div className="fixed inset-0 bg-black/50 z-[60] flex items-end sm:items-center justify-center p-4 animate-in fade-in">
-                    <div className="bg-white w-full max-w-md rounded-2xl p-5 space-y-3 animate-in slide-in-from-bottom-10 sm:slide-in-from-bottom-0">
-                        <div className="flex justify-between items-center mb-2">
-                            <h3 className="font-bold text-slate-700">新增優惠券</h3>
-                            <button onClick={() => setShowAddCoupon(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
-                        </div>
-                        <input type="text" placeholder="標題 (例: 松本清 5% OFF)" value={newCouponForm.title} onChange={e => setNewCouponForm({...newCouponForm, title: e.target.value})} className="w-full p-2 border rounded-xl text-sm" />
-                        <input type="text" placeholder="優惠碼 (選填)" value={newCouponForm.code} onChange={e => setNewCouponForm({...newCouponForm, code: e.target.value})} className="w-full p-2 border rounded-xl text-sm font-mono" />
-                        <input type="text" placeholder="描述/備註 (選填)" value={newCouponForm.description} onChange={e => setNewCouponForm({...newCouponForm, description: e.target.value})} className="w-full p-2 border rounded-xl text-sm" />
-                        
-                        {/* 圖片上傳 */}
-                        <div className="flex items-center gap-3">
-                            <button onClick={() => fileInputRef.current.click()} className="bg-slate-100 text-slate-600 px-3 py-2 rounded-xl text-sm flex items-center gap-2 hover:bg-slate-200 transition">
-                                <ImageIcon className="w-4 h-4" /> 上傳條碼/截圖
-                            </button>
-                            <input type="file" ref={fileInputRef} onChange={handleImageUpload} accept="image/*" className="hidden" />
-                            {newCouponForm.image && <span className="text-xs text-green-500 flex items-center gap-1"><CheckCircle className="w-3 h-3"/> 已選擇圖片</span>}
-                        </div>
-                        {newCouponForm.image && <img src={newCouponForm.image} alt="Preview" className="w-full h-32 object-cover rounded-xl border" />}
-
-                        <button onClick={addCoupon} className="w-full bg-red-500 text-white py-2 rounded-xl font-bold mt-2 hover:bg-red-600 transition">儲存優惠券</button>
-                    </div>
-                </div>
-            )}
-
-            <div className="grid gap-3">
-              {coupons.map(coupon => (
-                <div key={coupon.id} className="bg-white border border-red-100 rounded-2xl p-4 shadow-sm relative group overflow-hidden">
-                  <button onClick={() => deleteCoupon(coupon.id)} className="absolute top-2 right-2 p-1 bg-white/80 rounded-full text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition z-10">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-
-                  {coupon.image && (
-                      <div className="mb-3 rounded-xl overflow-hidden border border-slate-100">
-                          <img src={coupon.image} alt={coupon.title} className="w-full h-auto object-cover" />
-                      </div>
-                  )}
-                  
-                  <div className="flex justify-between items-start mb-3">
-                    <div>
-                      <h3 className="font-bold text-base">{coupon.title}</h3>
-                      {coupon.description && <p className="text-xs text-slate-500">{coupon.description}</p>}
-                    </div>
-                    {!coupon.image && <Ticket className="text-red-400 w-6 h-6 opacity-50" />}
+                <section className="bg-white rounded-2xl shadow-sm p-5 border border-slate-100">
+                  <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-lg font-bold flex items-center gap-2 text-purple-700"><Edit2 className="w-5 h-5" /> 旅遊備忘錄</h2>
+                    <button 
+                      onClick={() => setMemos([...memos, { id: Date.now(), text: '' }])}
+                      className="p-2 bg-purple-100 text-purple-600 rounded-lg hover:bg-purple-200 transition"
+                    >
+                      <Plus className="w-4 h-4" />
+                    </button>
                   </div>
-                  
-                  {coupon.code && (
-                    <div className="flex gap-2 bg-red-50/50 p-2 rounded-xl">
-                        <div className="flex-grow font-mono text-center font-bold text-red-600 text-sm tracking-wider flex items-center justify-center">
-                        {coupon.code}
-                        </div>
+                  <div className="space-y-3">
+                    {memos.map(memo => (
+                      <div key={memo.id} className="relative group">
+                        <textarea 
+                          placeholder="輸入心情、必買物或筆記..."
+                          value={memo.text}
+                          onChange={(e) => setMemos(memos.map(m => m.id === memo.id ? {...m, text: e.target.value} : m))}
+                          className="w-full p-3 bg-purple-50/50 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-200 resize-none min-h-[80px] border border-transparent focus:border-purple-200 transition"
+                        />
                         <button 
-                        onClick={() => { navigator.clipboard.writeText(coupon.code); alert("已複製代碼！"); }}
-                        className="bg-white text-red-500 border border-red-200 px-3 py-1 rounded-lg text-xs font-medium hover:bg-red-50 active:scale-95"
+                          onClick={() => setMemos(memos.filter(m => m.id !== memo.id))}
+                          className="absolute top-2 right-2 p-1 text-purple-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition bg-white rounded-full shadow-sm"
                         >
-                        複製
+                          <Trash2 className="w-3 h-3" />
                         </button>
-                    </div>
-                  )}
-                </div>
-              ))}
-              {coupons.length === 0 && <div className="text-center text-slate-400 py-10 bg-white rounded-2xl border-2 border-dashed border-red-100">錢包空空如也，快新增優惠券吧！</div>}
-
-              {/* 匯率轉換 */}
-              <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 mt-4">
-                <h3 className="font-bold mb-3 flex items-center gap-2 text-sm text-slate-700"><RefreshCw className="w-4 h-4 text-blue-500" /> 簡易匯率換算 (參考值 0.21)</h3>
-                <div className="flex gap-3 items-center">
-                  <div className="flex-1 relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">TWD</span>
-                    <input type="number" value={currency.twd} onChange={(e) => handleCurrencyChange(Number(e.target.value))} className="w-full pl-12 p-2 bg-slate-50 rounded-xl focus:outline-none text-sm font-medium" />
+                      </div>
+                    ))}
+                    {memos.length === 0 && <p className="text-center text-slate-400 text-sm py-4 bg-slate-50 rounded-xl border border-dashed">點擊「+」紀錄旅途點滴</p>}
                   </div>
-                  <span className="text-slate-400">≈</span>
-                  <div className="flex-1 relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-blue-500">JPY</span>
-                    <div className="w-full pl-12 p-2 bg-blue-50 text-blue-700 font-bold rounded-xl text-sm">
-                      {currency.jpy.toLocaleString()}
+                </section>
+              </div>
+            )}
+
+            {/* --- Tab 4: 優惠券錢包 --- */}
+            {activeTab === 'coupons' && (
+              <div className="space-y-4 animate-in slide-in-from-right duration-300">
+                <div className="flex justify-between items-center">
+                    <h2 className="text-lg font-bold flex items-center gap-2 text-red-600"><Ticket className="w-5 h-5" /> 優惠券錢包</h2>
+                    <button onClick={() => setShowAddCoupon(true)} className="bg-red-100 text-red-600 px-3 py-1.5 rounded-full text-sm font-medium flex items-center gap-1 hover:bg-red-200 transition">
+                        <Plus className="w-4 h-4" /> 新增優惠券
+                    </button>
+                </div>
+                
+                {showAddCoupon && (
+                    <div className="fixed inset-0 bg-black/50 z-[60] flex items-end sm:items-center justify-center p-4 animate-in fade-in">
+                        <div className="bg-white w-full max-w-md rounded-2xl p-5 space-y-3 animate-in slide-in-from-bottom-10 sm:slide-in-from-bottom-0">
+                            <div className="flex justify-between items-center mb-2">
+                                <h3 className="font-bold text-slate-700">新增優惠券</h3>
+                                <button onClick={() => setShowAddCoupon(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+                            </div>
+                            <input type="text" placeholder="標題 (例: 松本清 5% OFF)" value={newCouponForm.title} onChange={e => setNewCouponForm({...newCouponForm, title: e.target.value})} className="w-full p-2 border rounded-xl text-sm" />
+                            <input type="text" placeholder="優惠碼 (選填)" value={newCouponForm.code} onChange={e => setNewCouponForm({...newCouponForm, code: e.target.value})} className="w-full p-2 border rounded-xl text-sm font-mono" />
+                            <input type="text" placeholder="描述/備註 (選填)" value={newCouponForm.description} onChange={e => setNewCouponForm({...newCouponForm, description: e.target.value})} className="w-full p-2 border rounded-xl text-sm" />
+                            
+                            <div className="flex items-center gap-3">
+                                <button onClick={() => fileInputRef.current.click()} className="bg-slate-100 text-slate-600 px-3 py-2 rounded-xl text-sm flex items-center gap-2 hover:bg-slate-200 transition">
+                                    <ImageIcon className="w-4 h-4" /> 上傳條碼/截圖
+                                </button>
+                                <input type="file" ref={fileInputRef} onChange={handleImageUpload} accept="image/*" className="hidden" />
+                                {newCouponForm.image && <span className="text-xs text-green-500 flex items-center gap-1"><CheckCircle className="w-3 h-3"/> 已選擇圖片</span>}
+                            </div>
+                            {newCouponForm.image && <img src={newCouponForm.image} alt="Preview" className="w-full h-32 object-cover rounded-xl border" />}
+
+                            <button onClick={addCoupon} className="w-full bg-red-500 text-white py-2 rounded-xl font-bold mt-2 hover:bg-red-600 transition">儲存優惠券</button>
+                        </div>
+                    </div>
+                )}
+
+                <div className="grid gap-3">
+                  {coupons.map(coupon => (
+                    <div key={coupon.id} className="bg-white border border-red-100 rounded-2xl p-4 shadow-sm relative group overflow-hidden">
+                      <button onClick={() => deleteCoupon(coupon.id)} className="absolute top-2 right-2 p-1 bg-white/80 rounded-full text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition z-10">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+
+                      {coupon.image && (
+                          <div className="mb-3 rounded-xl overflow-hidden border border-slate-100">
+                              <img src={coupon.image} alt={coupon.title} className="w-full h-auto object-cover" />
+                          </div>
+                      )}
+                      
+                      <div className="flex justify-between items-start mb-3">
+                        <div>
+                          <h3 className="font-bold text-base">{coupon.title}</h3>
+                          {coupon.description && <p className="text-xs text-slate-500">{coupon.description}</p>}
+                        </div>
+                        {!coupon.image && <Ticket className="text-red-400 w-6 h-6 opacity-50" />}
+                      </div>
+                      
+                      {coupon.code && (
+                        <div className="flex gap-2 bg-red-50/50 p-2 rounded-xl">
+                            <div className="flex-grow font-mono text-center font-bold text-red-600 text-sm tracking-wider flex items-center justify-center">
+                            {coupon.code}
+                            </div>
+                            <button 
+                            onClick={() => { navigator.clipboard.writeText(coupon.code); alert("已複製代碼！"); }}
+                            className="bg-white text-red-500 border border-red-200 px-3 py-1 rounded-lg text-xs font-medium hover:bg-red-50 active:scale-95"
+                            >
+                            複製
+                            </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {coupons.length === 0 && <div className="text-center text-slate-400 py-10 bg-white rounded-2xl border-2 border-dashed border-red-100">錢包空空如也，快新增優惠券吧！</div>}
+
+                  <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 mt-4">
+                    <h3 className="font-bold mb-3 flex items-center gap-2 text-sm text-slate-700"><RefreshCw className="w-4 h-4 text-blue-500" /> 簡易匯率換算 (參考值 0.21)</h3>
+                    <div className="flex gap-3 items-center">
+                      <div className="flex-1 relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">TWD</span>
+                        <input type="number" value={currency.twd} onChange={(e) => handleCurrencyChange(Number(e.target.value))} className="w-full pl-12 p-2 bg-slate-50 rounded-xl focus:outline-none text-sm font-medium" />
+                      </div>
+                      <span className="text-slate-400">≈</span>
+                      <div className="flex-1 relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-blue-500">JPY</span>
+                        <div className="w-full pl-12 p-2 bg-blue-50 text-blue-700 font-bold rounded-xl text-sm">
+                          {currency.jpy.toLocaleString()}
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* --- Tab 5: AI 翻譯 --- */}
-        {activeTab === 'translate' && (
-          <div className="space-y-6 animate-in slide-in-from-right duration-300">
-            <div className="bg-indigo-600 rounded-3xl p-6 text-white shadow-lg relative overflow-hidden">
-               <Languages className="absolute right-[-20px] top-[-20px] w-32 h-32 opacity-10" />
-               <h2 className="text-xl font-bold mb-2 flex items-center gap-2">AI 隨身日語翻譯</h2>
-               <p className="text-indigo-100 text-sm">輸入中文，立刻轉為自然、有禮貌的日語，讓溝通零距離。</p>
-            </div>
-
-            <div className="bg-white rounded-2xl shadow-sm p-4 border border-slate-100 space-y-4">
-              <div>
-                <label className="text-xs font-bold text-slate-400 mb-1 block">中文輸入</label>
-                <textarea 
-                  value={transInput}
-                  onChange={(e) => setTransInput(e.target.value)}
-                  placeholder="例如：請問這個多少錢？ / 我對蝦子過敏。"
-                  className="w-full p-4 bg-slate-50 rounded-xl text-base focus:outline-none focus:ring-2 focus:ring-indigo-200 resize-none h-24"
-                />
-              </div>
-              
-              <button 
-                onClick={handleTranslate}
-                disabled={translating || !transInput}
-                className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-indigo-700 transition disabled:opacity-50"
-              >
-                {translating ? <Loader2 className="animate-spin w-5 h-5" /> : <Sparkles className="w-5 h-5" />}
-                翻譯成日語
-              </button>
-            </div>
-
-            {transResult && (
-              <div className="bg-white rounded-2xl shadow-sm p-6 border-l-4 border-indigo-500 animate-in fade-in slide-in-from-bottom-2">
-                <div className="mb-4">
-                  <p className="text-xs text-slate-400 font-bold mb-1">日語 (Polite)</p>
-                  <p className="text-2xl font-bold text-slate-800">{transResult.japanese}</p>
-                </div>
-                <div className="bg-slate-50 p-3 rounded-lg">
-                  <p className="text-xs text-slate-400 font-bold mb-1">發音 (Romaji)</p>
-                  <p className="text-sm font-mono text-indigo-600 font-medium">{transResult.romaji}</p>
                 </div>
               </div>
             )}
-          </div>
-        )}
 
-      </main>
+            {/* --- Tab 5: AI 翻譯 --- */}
+            {activeTab === 'translate' && (
+              <div className="space-y-6 animate-in slide-in-from-right duration-300">
+                <div className="bg-indigo-600 rounded-3xl p-6 text-white shadow-lg relative overflow-hidden">
+                   <Languages className="absolute right-[-20px] top-[-20px] w-32 h-32 opacity-10" />
+                   <h2 className="text-xl font-bold mb-2 flex items-center gap-2">AI 隨身日語翻譯</h2>
+                   <p className="text-indigo-100 text-sm">輸入中文，立刻轉為自然、有禮貌的日語，讓溝通零距離。</p>
+                </div>
 
-      {/* Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t border-slate-200/60 px-2 py-2 z-50 safe-area-bottom">
-        <div className="max-w-md mx-auto flex justify-between items-center">
-          {['planner', 'food', 'prep', 'coupons', 'translate'].map(tab => (
-            <button 
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`flex flex-col items-center gap-1 p-2 rounded-xl transition relative min-w-[3.5rem] ${activeTab === tab ? 'text-pink-600 bg-pink-50' : 'text-slate-400 hover:bg-slate-50'}`}
-            >
-              {tab === 'planner' && <Calendar className="w-5 h-5" />}
-              {tab === 'food' && <Utensils className="w-5 h-5" />}
-              {tab === 'prep' && <ClipboardList className="w-5 h-5" />}
-              {tab === 'coupons' && <Ticket className="w-5 h-5" />}
-              {tab === 'translate' && <Languages className="w-5 h-5" />}
-              <span className="text-[10px] font-medium scale-90 sm:scale-100">
-                {tab === 'planner' ? '行程' : tab === 'food' ? '美食' : tab === 'prep' ? '準備' : tab === 'coupons' ? '優惠' : '翻譯'}
-              </span>
-            </button>
-          ))}
-        </div>
-      </nav>
+                <div className="bg-white rounded-2xl shadow-sm p-4 border border-slate-100 space-y-4">
+                  <div>
+                    <label className="text-xs font-bold text-slate-400 mb-1 block">中文輸入</label>
+                    <textarea 
+                      value={transInput}
+                      onChange={(e) => setTransInput(e.target.value)}
+                      placeholder="例如：請問這個多少錢？ / 我對蝦子過敏。"
+                      className="w-full p-4 bg-slate-50 rounded-xl text-base focus:outline-none focus:ring-2 focus:ring-indigo-200 resize-none h-24"
+                    />
+                  </div>
+                  
+                  <button 
+                    onClick={handleTranslate}
+                    disabled={translating || !transInput}
+                    className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-indigo-700 transition disabled:opacity-50"
+                  >
+                    {translating ? <Loader2 className="animate-spin w-5 h-5" /> : <Sparkles className="w-5 h-5" />}
+                    翻譯成日語
+                  </button>
+                </div>
 
-      {/* Loading Overlay */}
-      {loading && (
-        <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-[100] flex items-center justify-center animate-in fade-in">
-          <div className="bg-white p-6 rounded-3xl shadow-2xl flex flex-col items-center gap-4 mx-8">
-            <div className="relative">
-                <div className="w-12 h-12 rounded-full border-4 border-pink-200 animate-spin border-t-pink-500"></div>
-                <Heart className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-5 h-5 text-pink-500 fill-pink-500 animate-pulse" />
+                {transResult && (
+                  <div className="bg-white rounded-2xl shadow-sm p-6 border-l-4 border-indigo-500 animate-in fade-in slide-in-from-bottom-2">
+                    <div className="mb-4">
+                      <p className="text-xs text-slate-400 font-bold mb-1">日語 (Polite)</p>
+                      <p className="text-2xl font-bold text-slate-800">{transResult.japanese}</p>
+                    </div>
+                    <div className="bg-slate-50 p-3 rounded-lg">
+                      <p className="text-xs text-slate-400 font-bold mb-1">發音 (Romaji)</p>
+                      <p className="text-sm font-mono text-indigo-600 font-medium">{transResult.romaji}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+          </main>
+
+          {/* Bottom Navigation */}
+          <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t border-slate-200/60 px-2 py-2 z-50 safe-area-bottom">
+            <div className="max-w-md mx-auto flex justify-between items-center">
+              {['planner', 'food', 'prep', 'coupons', 'translate'].map(tab => (
+                <button 
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  className={`flex flex-col items-center gap-1 p-2 rounded-xl transition relative min-w-[3.5rem] ${activeTab === tab ? 'text-pink-600 bg-pink-50' : 'text-slate-400 hover:bg-slate-50'}`}
+                >
+                  {tab === 'planner' && <Calendar className="w-5 h-5" />}
+                  {tab === 'food' && <Utensils className="w-5 h-5" />}
+                  {tab === 'prep' && <ClipboardList className="w-5 h-5" />}
+                  {tab === 'coupons' && <Ticket className="w-5 h-5" />}
+                  {tab === 'translate' && <Languages className="w-5 h-5" />}
+                  <span className="text-[10px] font-medium scale-90 sm:scale-100">
+                    {tab === 'planner' ? '行程' : tab === 'food' ? '美食' : tab === 'prep' ? '準備' : tab === 'coupons' ? '優惠' : '翻譯'}
+                  </span>
+                </button>
+              ))}
             </div>
-            <p className="font-bold text-slate-700 text-center">AI 正在精心規劃您的浪漫旅程...</p>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
+          </nav>
 
-export default App;
+          {/* Loading Overlay */}
+          {loading && (
+            <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-[100] flex items-center justify-center animate-in fade-in">
+              <div className="bg-white p-6 rounded-3xl shadow-2xl flex flex-col items-center gap-4 mx-8">
+                <div className="relative">
+                    <div className="w-12 h-12 rounded-full border-4 border-pink-200 animate-spin border-t-pink-500"></div>
+                    <Heart className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-5 h-5 text-pink-500 fill-pink-500 animate-pulse" />
+                </div>
+                <p className="font-bold text-slate-700 text-center">AI 正在精心規劃您的浪漫旅程...</p>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    // Mount the app
+    const root = createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
