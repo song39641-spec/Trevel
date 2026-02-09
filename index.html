@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>日本蜜月行程管家 (穩定版)</title>
+  <title>日本蜜月行程管家 (診斷修復版)</title>
   <meta name="robots" content="noindex, nofollow">
   
   <!-- Tailwind CSS -->
@@ -51,7 +51,7 @@
   <!-- 初始載入畫面 -->
   <div id="initial-loader">
     <div class="spinner"></div>
-    <p class="mt-4 text-pink-600 font-bold animate-pulse">正在連接共享行程資料庫...</p>
+    <p class="mt-4 text-pink-600 font-bold animate-pulse">系統啟動中...</p>
   </div>
 
   <div id="root"></div>
@@ -63,7 +63,7 @@
       Calendar, MapPin, Utensils, CloudSun, ClipboardList, Ticket, 
       Plus, Trash2, Navigation, Heart, Edit2, CheckCircle, 
       ExternalLink, Loader2, RefreshCw, Image as ImageIcon, X,
-      Languages, Sparkles, Cloud, ThermometerSun, Save, Calculator, Percent, AlertCircle, WifiOff, Users, ChevronDown, ChevronRight
+      Languages, Sparkles, Cloud, ThermometerSun, Save, Calculator, Percent, AlertCircle, WifiOff, Users, ChevronDown, ChevronRight, Bug
     } from 'lucide-react';
 
     // --- Firebase Setup ---
@@ -71,9 +71,10 @@
     import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken, setPersistence, browserLocalPersistence } from 'firebase/auth';
     import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
 
-    // Updated API Key (User Provided)
+    // AI API Key
     const apiKey = "AIzaSyBaKZYU4d3i3SFFOyBj75kOqtNxqcM-M50";
     
+    // Firebase Config (User Provided)
     const firebaseConfig = {
       apiKey: "AIzaSyBFu36_wc5-5cOWOppnfQpQ1l27fRH1mOU",
       authDomain: "travel-5f00e.firebaseapp.com",
@@ -87,14 +88,18 @@
     const app = initializeApp(firebaseConfig);
     const auth = getAuth(app);
     const db = getFirestore(app);
+    // 固定 App ID 確保多人協作
     const appId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'default-honeymoon-app';
 
     // --- Constants ---
-    const EXCHANGE_RATE = 0.21; // 匯率參考值
+    const EXCHANGE_RATE = 0.21; 
 
     // --- API Helpers ---
-    const fetchGemini = async (prompt, systemPrompt = "") => {
+    const fetchGemini = async (prompt, systemPrompt = "", setStatus) => {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+      
+      if(setStatus) setStatus("正在連線 AI 模型...");
+      
       let delay = 1000;
       for (let i = 0; i < 3; i++) {
         try {
@@ -107,28 +112,43 @@
               generationConfig: { responseMimeType: "application/json" }
             })
           });
-          const data = await response.json();
-          let text = data.candidates[0].content.parts[0].text;
           
-          // 強力解析：嘗試抓取 JSON 陣列或物件，忽略前後的 Markdown
-          const jsonMatch = text.match(/\[[\s\S]*\]/) || text.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-              return JSON.parse(jsonMatch[0]);
+          if (!response.ok) {
+              const errData = await response.json();
+              throw new Error(`AI API Error: ${errData.error?.message || response.statusText}`);
           }
+
+          if(setStatus) setStatus("AI 正在思考並撰寫 JSON...");
           
-          // 備用清洗邏輯
+          const data = await response.json();
+          let text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          
+          if (!text) throw new Error("AI 回傳內容為空");
+
+          if(setStatus) setStatus("正在解析行程資料...");
+          console.log("Raw AI Response:", text); 
+
+          // Robust Parsing
+          const arrayMatch = text.match(/\[[\s\S]*\]/);
+          if (arrayMatch) return JSON.parse(arrayMatch[0]);
+          
+          const objectMatch = text.match(/\{[\s\S]*\}/);
+          if (objectMatch) return JSON.parse(objectMatch[0]);
+
           text = text.replace(/^```json\s*/, "").replace(/^```\s*/, "").replace(/```$/, "").trim();
           return JSON.parse(text);
+
         } catch (error) {
-          console.warn("AI parse error or fetch error:", error);
+          console.warn(`Attempt ${i+1} failed:`, error);
           if (i === 2) throw error;
+          if(setStatus) setStatus(`連線不穩，重試中 (${i+1}/3)...`);
           await new Promise(r => setTimeout(r, delay));
           delay *= 1.5;
         }
       }
     };
 
-    // --- OPTIMIZED COMPONENTS ---
+    // --- COMPONENTS ---
 
     // 1. Weather Card
     const WeatherCard = memo(({ info, onDelete }) => (
@@ -146,7 +166,7 @@
       </div>
     ));
 
-    // 2. Planner Tab
+    // 2. Day Section
     const DaySection = memo(({ day, dIdx, currentTripId, updateEvent }) => {
         const [isExpanded, setIsExpanded] = useState(true);
 
@@ -221,19 +241,31 @@
         );
     });
 
-    const PlannerTab = memo(({ trips, selectedTripId, setSelectedTripId, deleteTrip, showAddTrip, setShowAddTrip, newTripForm, setNewTripForm, generateItineraryDoc, loading, updateEvent, currentTrip, isDataLoading, isOnline }) => {
+    const PlannerTab = memo(({ trips, selectedTripId, setSelectedTripId, deleteTrip, showAddTrip, setShowAddTrip, newTripForm, setNewTripForm, generateItineraryDoc, loading, loadingStatus, updateEvent, currentTrip, isDataLoading, isOnline, errorMessage }) => {
       
       if (isDataLoading) {
         return (
           <div className="flex flex-col items-center justify-center py-20 animate-in fade-in text-center px-4">
              <Loader2 className="w-10 h-10 text-pink-500 animate-spin mb-4" />
-             <p className="text-slate-500 font-medium">正在從資料庫讀取...</p>
+             <p className="text-slate-500 font-medium">正在從資料庫讀取行程...</p>
+             <p className="text-xs text-slate-400 mt-2">若超過5秒未回應，請檢查網路</p>
           </div>
         );
       }
 
       return (
         <div className="space-y-4 animate-in fade-in duration-500">
+            {/* Error Message Display */}
+            {errorMessage && (
+                <div className="bg-red-50 border border-red-200 text-red-600 p-4 rounded-xl flex items-start gap-3 animate-in slide-in-from-top-2 mx-1">
+                    <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                    <div className="text-sm">
+                        <p className="font-bold">發生錯誤</p>
+                        <p>{errorMessage}</p>
+                    </div>
+                </div>
+            )}
+
             {/* Trip Tabs */}
             <div className="flex items-center gap-2 overflow-x-auto pb-2 no-scrollbar px-1">
                 {trips.map(trip => (
@@ -291,7 +323,7 @@
                                 disabled={!isOnline}
                                 className="bg-pink-500 text-white px-6 py-3 rounded-full font-bold text-sm shadow-lg shadow-pink-200 hover:bg-pink-600 transition disabled:opacity-50 disabled:cursor-not-allowed"
                            >
-                               {isOnline ? "開始 AI 規劃" : "等待資料庫連線..."}
+                               {isOnline ? "開始 AI 規劃" : "資料庫連線中..."}
                            </button>
                        </div>
                    </div>
@@ -359,7 +391,7 @@
                             {loading ? (
                                 <>
                                     <Loader2 className="animate-spin w-5 h-5" /> 
-                                    AI 正在為您規劃...
+                                    {loadingStatus || "AI 正在啟動..."}
                                 </>
                             ) : (
                                 <>
@@ -368,6 +400,10 @@
                                 </>
                             )}
                         </button>
+                        
+                        {!isOnline && !loading && (
+                            <p className="text-xs text-red-500 text-center mt-2">無法連線到資料庫，請檢查網路。</p>
+                        )}
                     </div>
                 </div>
             )}
@@ -375,7 +411,34 @@
       );
     });
 
-    // 3. Prep Tab
+    const FoodTab = memo(({ getNearbyFood, loading, nearbyFood }) => (
+      <div className="space-y-4 animate-in slide-in-from-right duration-300">
+        <div className="bg-white p-5 rounded-2xl shadow-sm space-y-3 text-center relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-orange-300 to-orange-500"></div>
+          <h2 className="text-lg font-bold flex items-center justify-center gap-2 text-orange-600"><Utensils className="w-5 h-5" /> 附近美食探索</h2>
+          <button onClick={getNearbyFood} disabled={loading} className="w-full bg-gradient-to-r from-orange-400 to-orange-500 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition active:scale-95 disabled:opacity-70">
+            {loading ? <Loader2 className="animate-spin" /> : <Navigation className="w-5 h-5" />} 搜尋附近美食
+          </button>
+        </div>
+        <div className="grid gap-3">
+          {nearbyFood.map((food, idx) => (
+            <div key={idx} className="bg-white p-3 rounded-2xl shadow-sm flex gap-3 border-l-4 border-orange-400">
+              <div className="flex-grow">
+                <div className="flex justify-between items-start">
+                  <h3 className="font-bold text-slate-800">{food.name}</h3>
+                  <span className="text-orange-500 font-extrabold flex items-center gap-1 text-sm">★ {food.rating}</span>
+                </div>
+                <p className="text-xs text-slate-500 mb-1">{food.type} · <span className="italic">「{food.reason}」</span></p>
+                <button onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(food.name + ' ' + food.address)}`, '_blank')} className="text-xs text-blue-500 flex items-center gap-1 hover:underline bg-blue-50 px-2 py-1 rounded-full w-fit mt-2">
+                  <MapPin className="w-3 h-3" /> 導航至：{food.address}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    ));
+
     const PrepTab = memo(({ packingList, setPackingList, deletePackingItem, newItemText, setNewItemText, addPackingItem, memos, setMemos, suggestPackingItems, suggestingItems, weatherInfos, addWeatherLocation, isAddingWeather }) => {
       const [weatherCity, setWeatherCity] = useState('');
       
@@ -448,36 +511,6 @@
       );
     });
 
-    // 4. Food Tab
-    const FoodTab = memo(({ getNearbyFood, loading, nearbyFood }) => (
-      <div className="space-y-4 animate-in slide-in-from-right duration-300">
-        <div className="bg-white p-5 rounded-2xl shadow-sm space-y-3 text-center relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-orange-300 to-orange-500"></div>
-          <h2 className="text-lg font-bold flex items-center justify-center gap-2 text-orange-600"><Utensils className="w-5 h-5" /> 附近美食探索</h2>
-          <button onClick={getNearbyFood} disabled={loading} className="w-full bg-gradient-to-r from-orange-400 to-orange-500 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition active:scale-95 disabled:opacity-70">
-            {loading ? <Loader2 className="animate-spin" /> : <Navigation className="w-5 h-5" />} 搜尋附近美食
-          </button>
-        </div>
-        <div className="grid gap-3">
-          {nearbyFood.map((food, idx) => (
-            <div key={idx} className="bg-white p-3 rounded-2xl shadow-sm flex gap-3 border-l-4 border-orange-400">
-              <div className="flex-grow">
-                <div className="flex justify-between items-start">
-                  <h3 className="font-bold text-slate-800">{food.name}</h3>
-                  <span className="text-orange-500 font-extrabold flex items-center gap-1 text-sm">★ {food.rating}</span>
-                </div>
-                <p className="text-xs text-slate-500 mb-1">{food.type} · <span className="italic">「{food.reason}」</span></p>
-                <button onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(food.name + ' ' + food.address)}`, '_blank')} className="text-xs text-blue-500 flex items-center gap-1 hover:underline bg-blue-50 px-2 py-1 rounded-full w-fit mt-2">
-                  <MapPin className="w-3 h-3" /> 導航至：{food.address}
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    ));
-
-    // 5. Coupons Tab with Enhanced Calculator
     const CouponsTab = memo(({ coupons, setCoupons, showAddCoupon, setShowAddCoupon, newCouponForm, setNewCouponForm, handleImageUpload, currency, handleCurrencyTwd, handleCurrencyJpy }) => {
        const [calcPrice, setCalcPrice] = useState('');
        const [isTaxIncluded, setIsTaxIncluded] = useState(true);
@@ -593,7 +626,6 @@
        );
     });
 
-    // 6. Translate Tab
     const TranslateTab = memo(({ transInput, setTransInput, handleTranslate, translating, transResult }) => (
         <div className="space-y-6 animate-in slide-in-from-right duration-300">
           <div className="bg-indigo-600 rounded-3xl p-6 text-white shadow-lg relative overflow-hidden">
@@ -642,6 +674,7 @@
     const App = () => {
       const [activeTab, setActiveTab] = useState('planner');
       const [loading, setLoading] = useState(false);
+      const [loadingStatus, setLoadingStatus] = useState("");
       const [currency, setCurrency] = useState({ twd: 100, jpy: 0 });
       const [user, setUser] = useState(null);
       const [isSaving, setIsSaving] = useState(false);
@@ -678,7 +711,7 @@
 
       // Data Loading State
       const [isDataLoading, setIsDataLoading] = useState(true);
-      const [authError, setAuthError] = useState(false);
+      const [authError, setAuthError] = useState(null);
 
       useEffect(() => {
         const loader = document.getElementById('initial-loader');
@@ -704,12 +737,20 @@
         };
         initAuth();
         
-        const timeout = setTimeout(() => { if (isDataLoading) setIsDataLoading(false); }, 5000);
+        // 強制 5 秒後停止 Loading，避免轉圈圈
+        const timeout = setTimeout(() => { 
+            if (isDataLoading) {
+                setIsDataLoading(false); 
+                if (!user) setAuthError("資料庫連線逾時，請檢查網路設定。");
+            }
+        }, 5000);
+
         return () => { clearTimeout(timeout); onAuthStateChanged(auth, setUser); };
       }, []);
 
       useEffect(() => {
         if (!user) return;
+        setAuthError(null);
         // CHANGE TO SHARED PUBLIC PATH
         const unsubscribe = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'shared_trip_data', 'main'), (docSnap) => {
           if (docSnap.exists()) {
@@ -721,24 +762,21 @@
             if (data.coupons) setCoupons(data.coupons);
             if (data.weatherInfos) setWeatherInfos(data.weatherInfos);
             
-            // 重要：同步資料，但【不要】同步選擇的行程 (selectedTripId)，讓每個人可以看不同的行程
-            // 如果本地沒有選任何行程，且有資料，預設選第一個
             setSelectedTripId(prev => {
                 if (!prev && data.trips?.length > 0) {
                     return data.trips[0].id;
                 }
-                return prev; // 保持當前選擇，不被雲端覆蓋
+                return prev;
             });
 
             setTimeout(() => { isRemoteUpdate.current = false; }, 100);
           } else {
-              // 移除自動生成：只在資料庫完全沒資料時設定空陣列，等待用戶手動建立
               setTrips([]);
           }
           setIsDataLoading(false);
         }, (err) => {
             console.error("Sync Failed", err);
-            setAuthError(true);
+            setAuthError(`同步失敗: ${err.code || err.message}`);
             setIsDataLoading(false);
         });
         return () => unsubscribe();
@@ -750,43 +788,44 @@
         if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
         saveTimeoutRef.current = setTimeout(async () => {
           try {
-            // WRITE TO SHARED PUBLIC PATH
             await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'shared_trip_data', 'main'), dataToSave, { merge: true });
             setIsSaving(false);
-          } catch (err) { console.error(err); setIsSaving(false); }
+          } catch (err) { console.error(err); setIsSaving(false); setAuthError("儲存失敗，請檢查權限。"); }
         }, 1000);
       }, [user]);
 
       useEffect(() => {
         if (isRemoteUpdate.current || !user) return;
-        // 注意：這裡不儲存 currentSelection，避免干擾其他人
         saveToCloud({ trips, packingList, memos, coupons, weatherInfos });
       }, [trips, packingList, memos, coupons, weatherInfos, saveToCloud, user]);
 
       // --- Actions ---
       const generateItineraryDoc = async (loc, days, start, isInitial = false) => {
         setLoading(true); 
-        // Don't close modal here!
+        setLoadingStatus("AI 準備啟動...");
         try {
           const result = await fetchGemini(
             `規劃${start}開始的${days}天${loc}蜜月行程，請安排浪漫、美食與代表性景點。`,
-            `你是一位日本旅遊專家。請為新婚夫婦規劃${start}開始的${days}天${loc}蜜月行程。輸出格式必須為 JSON 陣列，包含 day (數字), date (字串YYYY-MM-DD), title (當天主題), events (陣列，含 time, activity, location, note)。`
+            `你是一位日本旅遊專家。請為新婚夫婦規劃${start}開始的${days}天${loc}蜜月行程。輸出格式必須為 JSON 陣列，包含 day (數字), date (字串YYYY-MM-DD), title (當天主題), events (陣列，含 time, activity, location, note)。`,
+            setLoadingStatus
           );
+          
+          setLoadingStatus("正在儲存行程...");
+          
           const newTrip = { id: Date.now(), location: loc, days, startDate: start, itineraryData: result };
           
           setTrips(prev => {
             const newTrips = [...prev, newTrip];
-            // 強制儲存：確保 AI 生成的資料立即寫入 DB
             saveToCloud({ trips: newTrips }); 
             return newTrips;
           });
           
-          setSelectedTripId(newTrip.id); // 本地切換到新行程
+          setSelectedTripId(newTrip.id);
           if (isInitial) setNewTripForm({ location: '', days: 5, startDate: '' });
           
-          if (!isInitial) setShowAddTrip(false); // Close Modal only after success
+          if (!isInitial) setShowAddTrip(false); 
         } catch (error) { 
-            alert("生成失敗，請重試"); 
+            alert(`生成失敗: ${error.message}`); 
         } finally { 
             setLoading(false); 
             setIsDataLoading(false); 
@@ -880,14 +919,14 @@
             {user ? (
                 <div className="text-[10px] text-slate-400 mt-1 flex items-center justify-center gap-1">
                     <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse"></div>
-                    已連線至共享空間
+                    已連線至共享空間 (ID: {user.uid.slice(0,4)})
                 </div>
             ) : (
                 <div className="text-[10px] text-slate-400 mt-1 flex items-center justify-center gap-1">
                     <Loader2 className="w-3 h-3 animate-spin"/> 連線中...
                 </div>
             )}
-            {authError && <div className="text-[10px] text-red-500 mt-1 flex items-center justify-center gap-1"><WifiOff className="w-3 h-3"/> 連線異常，請重新整理</div>}
+            {authError && <div className="text-[10px] text-red-500 mt-1 flex items-center justify-center gap-1 bg-red-50 p-1 rounded"><AlertCircle className="w-3 h-3"/> {authError}</div>}
           </header>
 
           <main className="max-w-4xl mx-auto p-4">
@@ -896,9 +935,9 @@
                 deleteTrip={deleteTrip}
                 setShowAddTrip={setShowAddTrip} showAddTrip={showAddTrip}
                 newTripForm={newTripForm} setNewTripForm={setNewTripForm}
-                generateItineraryDoc={generateItineraryDoc} loading={loading}
+                generateItineraryDoc={generateItineraryDoc} loading={loading} loadingStatus={loadingStatus}
                 updateEvent={updateEvent} currentTrip={currentTrip}
-                isDataLoading={isDataLoading} isOnline={!!user}
+                isDataLoading={isDataLoading} isOnline={!!user} errorMessage={authError}
             />}
 
             {activeTab === 'food' && <FoodTab getNearbyFood={getNearbyFood} loading={loading} nearbyFood={nearbyFood} />}
