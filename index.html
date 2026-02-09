@@ -51,7 +51,7 @@
   <!-- 初始載入畫面 -->
   <div id="initial-loader">
     <div class="spinner"></div>
-    <p class="mt-4 text-pink-600 font-bold animate-pulse">正在準備您的購物計算機...</p>
+    <p class="mt-4 text-pink-600 font-bold animate-pulse">正在同步雲端資料...</p>
   </div>
 
   <div id="root"></div>
@@ -63,7 +63,7 @@
       Calendar, MapPin, Utensils, CloudSun, ClipboardList, Ticket, 
       Plus, Trash2, Navigation, Heart, Edit2, CheckCircle, 
       ExternalLink, Loader2, RefreshCw, Image as ImageIcon, X,
-      Languages, Sparkles, Cloud, ThermometerSun, Save, Calculator, Percent
+      Languages, Sparkles, Cloud, ThermometerSun, Save, Calculator, Percent, AlertCircle
     } from 'lucide-react';
 
     // --- Firebase Setup ---
@@ -134,7 +134,17 @@
     ));
 
     // 2. Planner Tab
-    const PlannerTab = memo(({ trips, selectedTripId, setSelectedTripId, deleteTrip, showAddTrip, setShowAddTrip, newTripForm, setNewTripForm, generateItineraryDoc, loading, updateEvent, currentTrip }) => {
+    const PlannerTab = memo(({ trips, selectedTripId, setSelectedTripId, deleteTrip, showAddTrip, setShowAddTrip, newTripForm, setNewTripForm, generateItineraryDoc, loading, updateEvent, currentTrip, isDataLoading }) => {
+      
+      if (isDataLoading) {
+        return (
+          <div className="flex flex-col items-center justify-center py-20 animate-in fade-in">
+             <Loader2 className="w-10 h-10 text-pink-500 animate-spin mb-4" />
+             <p className="text-slate-500 font-medium">正在讀取雲端行程...</p>
+          </div>
+        );
+      }
+
       return (
         <div className="space-y-4 animate-in fade-in duration-500">
             <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
@@ -178,7 +188,7 @@
             )}
 
             {currentTrip ? (
-              currentTrip.itineraryData.map((day, dIdx) => (
+              currentTrip.itineraryData?.map((day, dIdx) => (
                 <div key={`${day.date}-${dIdx}`} className="bg-white rounded-2xl shadow-sm border border-pink-100 overflow-hidden">
                   <div className="bg-pink-50 p-3 border-b border-pink-100 flex justify-between items-center">
                     <h3 className="font-bold text-pink-800 flex flex-col sm:flex-row sm:gap-2">
@@ -187,7 +197,7 @@
                     </h3>
                   </div>
                   <div className="p-3 space-y-3">
-                    {day.events.map((event, eIdx) => (
+                    {day.events?.map((event, eIdx) => (
                       <div key={eIdx} className="flex gap-3 group relative">
                         <div className="w-14 flex-shrink-0 pt-1">
                           <input 
@@ -199,7 +209,7 @@
                         </div>
                         <div className="flex flex-col items-center relative">
                             <div className="w-3 h-3 rounded-full bg-pink-400 border-2 border-white shadow-sm z-10 mt-1.5"></div>
-                            {eIdx < day.events.length - 1 && <div className="w-0.5 flex-grow bg-pink-100 absolute top-4 bottom-0"></div>}
+                            {eIdx < (day.events.length || 0) - 1 && <div className="w-0.5 flex-grow bg-pink-100 absolute top-4 bottom-0"></div>}
                         </div>
                         <div className="flex-grow pb-2 space-y-1 pt-0.5">
                           <input 
@@ -231,7 +241,12 @@
                 </div>
               ))
             ) : (
-               !loading && <div className="text-center text-slate-400 py-10">請選擇或新增一個行程</div>
+               !loading && trips.length > 0 ? 
+               <div className="text-center text-slate-400 py-10 flex flex-col items-center">
+                 <AlertCircle className="w-10 h-10 mb-2 opacity-50"/>
+                 請點擊上方選擇一個行程
+               </div> :
+               !loading && <div className="text-center text-slate-400 py-10">尚無行程，請點擊「新增城市」</div>
             )}
         </div>
       );
@@ -349,16 +364,7 @@
 
        // Calculate results
        const basePrice = parseFloat(calcPrice) || 0;
-       // 1. Calculate price before extra discount
-       // If tax included and we want tax free, remove tax (divide by 1.1)
-       // If tax excluded, price is already tax free base
-       // Logic:
-       // If Tag says "Tax Included":
-       //    - Tax Free = Price / 1.1
-       //    - Non Tax Free = Price
-       // If Tag says "Tax Excluded":
-       //    - Tax Free = Price
-       //    - Non Tax Free = Price * 1.1
+       
        let preDiscountPrice = basePrice;
        if (isTaxIncluded) {
            if (isTaxFree) preDiscountPrice = basePrice / 1.1;
@@ -559,6 +565,9 @@
       const [transResult, setTransResult] = useState(null);
       const [translating, setTranslating] = useState(false);
 
+      // Data Loading State
+      const [isDataLoading, setIsDataLoading] = useState(true);
+
       useEffect(() => {
         const loader = document.getElementById('initial-loader');
         if(loader) {
@@ -591,11 +600,23 @@
             if (data.memos) setMemos(data.memos);
             if (data.coupons) setCoupons(data.coupons);
             if (data.weatherInfos) setWeatherInfos(data.weatherInfos);
-            if (!selectedTripId && data.trips?.length > 0) setSelectedTripId(data.trips[0].id);
+            
+            // Auto Select Fix
+            if (data.trips?.length > 0) {
+                 setSelectedTripId(prev => {
+                     // Only set if current selection is invalid or null
+                     if (!prev || !data.trips.find(t => t.id === prev)) {
+                         return data.trips[0].id;
+                     }
+                     return prev;
+                 });
+            }
+
             setTimeout(() => { isRemoteUpdate.current = false; }, 100);
           } else if (trips.length === 0) {
               generateItineraryDoc('北海道', 8, '2026-03-04', true);
           }
+          setIsDataLoading(false); // Data loaded (or determined empty)
         });
         return () => unsubscribe();
       }, [user]);
@@ -633,14 +654,22 @@
           });
           setSelectedTripId(newTrip.id);
           if (isInitial) setNewTripForm({ location: '', days: 5, startDate: '' });
-        } catch (error) { alert("生成失敗，請重試"); } finally { setLoading(false); }
+        } catch (error) { alert("生成失敗，請重試"); } finally { setLoading(false); setIsDataLoading(false); }
       };
 
       const updateEvent = useCallback((tripId, dayIdx, eventIdx, field, value) => {
         setTrips(prev => prev.map(trip => {
           if (trip.id === tripId) {
+            // Safety check for array existence
+            if (!trip.itineraryData || !trip.itineraryData[dayIdx] || !trip.itineraryData[dayIdx].events) return trip;
+
             const newData = [...trip.itineraryData];
-            newData[dayIdx].events[eventIdx][field] = value;
+            const newDay = {...newData[dayIdx]};
+            const newEvents = [...newDay.events];
+            newEvents[eventIdx] = {...newEvents[eventIdx], [field]: value};
+            newDay.events = newEvents;
+            newData[dayIdx] = newDay;
+            
             return { ...trip, itineraryData: newData };
           }
           return trip;
@@ -720,6 +749,7 @@
                 newTripForm={newTripForm} setNewTripForm={setNewTripForm}
                 generateItineraryDoc={generateItineraryDoc} loading={loading}
                 updateEvent={updateEvent} currentTrip={currentTrip}
+                isDataLoading={isDataLoading}
             />}
 
             {activeTab === 'food' && <FoodTab getNearbyFood={getNearbyFood} loading={loading} nearbyFood={nearbyFood} />}
