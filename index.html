@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>日本蜜月行程管家 (診斷修復版)</title>
+  <title>日本蜜月行程管家 (連線修復版)</title>
   <meta name="robots" content="noindex, nofollow">
   
   <!-- Tailwind CSS -->
@@ -51,7 +51,7 @@
   <!-- 初始載入畫面 -->
   <div id="initial-loader">
     <div class="spinner"></div>
-    <p class="mt-4 text-pink-600 font-bold animate-pulse">系統啟動中...</p>
+    <p class="mt-4 text-pink-600 font-bold animate-pulse">正在連接行程資料庫...</p>
   </div>
 
   <div id="root"></div>
@@ -63,13 +63,13 @@
       Calendar, MapPin, Utensils, CloudSun, ClipboardList, Ticket, 
       Plus, Trash2, Navigation, Heart, Edit2, CheckCircle, 
       ExternalLink, Loader2, RefreshCw, Image as ImageIcon, X,
-      Languages, Sparkles, Cloud, ThermometerSun, Save, Calculator, Percent, AlertCircle, WifiOff, Users, ChevronDown, ChevronRight, Bug
+      Languages, Sparkles, Cloud, ThermometerSun, Save, Calculator, Percent, AlertCircle, WifiOff, Users, ChevronDown, ChevronRight, RotateCcw
     } from 'lucide-react';
 
     // --- Firebase Setup ---
     import { initializeApp } from 'firebase/app';
-    import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken, setPersistence, browserLocalPersistence } from 'firebase/auth';
-    import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
+    import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+    import { getFirestore, doc, setDoc, onSnapshot, enableNetwork, disableNetwork } from 'firebase/firestore';
 
     // AI API Key
     const apiKey = "AIzaSyBaKZYU4d3i3SFFOyBj75kOqtNxqcM-M50";
@@ -241,31 +241,39 @@
         );
     });
 
-    const PlannerTab = memo(({ trips, selectedTripId, setSelectedTripId, deleteTrip, showAddTrip, setShowAddTrip, newTripForm, setNewTripForm, generateItineraryDoc, loading, loadingStatus, updateEvent, currentTrip, isDataLoading, isOnline, errorMessage }) => {
+    const PlannerTab = memo(({ trips, selectedTripId, setSelectedTripId, deleteTrip, showAddTrip, setShowAddTrip, newTripForm, setNewTripForm, generateItineraryDoc, loading, loadingStatus, updateEvent, currentTrip, isDataLoading, isOnline, errorMessage, forceReconnect }) => {
       
       if (isDataLoading) {
         return (
           <div className="flex flex-col items-center justify-center py-20 animate-in fade-in text-center px-4">
              <Loader2 className="w-10 h-10 text-pink-500 animate-spin mb-4" />
              <p className="text-slate-500 font-medium">正在從資料庫讀取行程...</p>
-             <p className="text-xs text-slate-400 mt-2">若超過5秒未回應，請檢查網路</p>
+             <p className="text-xs text-slate-400 mt-2">若超過 5 秒未回應，將顯示重試按鈕</p>
           </div>
         );
       }
 
+      // Serious Connection Error State
+      if (errorMessage) {
+          return (
+            <div className="flex flex-col items-center justify-center py-20 animate-in fade-in text-center px-4">
+                <div className="bg-red-50 p-6 rounded-3xl border border-red-100 max-w-sm">
+                    <WifiOff className="w-12 h-12 text-red-400 mx-auto mb-4" />
+                    <h3 className="font-bold text-red-700 text-lg mb-2">無法連線到資料庫</h3>
+                    <p className="text-red-500 text-sm mb-6">{errorMessage}</p>
+                    <button 
+                        onClick={forceReconnect}
+                        className="bg-red-500 text-white px-6 py-3 rounded-xl font-bold text-sm shadow-lg shadow-red-200 hover:bg-red-600 transition flex items-center gap-2 mx-auto"
+                    >
+                        <RotateCcw className="w-4 h-4" /> 重試連線
+                    </button>
+                </div>
+            </div>
+          );
+      }
+
       return (
         <div className="space-y-4 animate-in fade-in duration-500">
-            {/* Error Message Display */}
-            {errorMessage && (
-                <div className="bg-red-50 border border-red-200 text-red-600 p-4 rounded-xl flex items-start gap-3 animate-in slide-in-from-top-2 mx-1">
-                    <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
-                    <div className="text-sm">
-                        <p className="font-bold">發生錯誤</p>
-                        <p>{errorMessage}</p>
-                    </div>
-                </div>
-            )}
-
             {/* Trip Tabs */}
             <div className="flex items-center gap-2 overflow-x-auto pb-2 no-scrollbar px-1">
                 {trips.map(trip => (
@@ -323,7 +331,7 @@
                                 disabled={!isOnline}
                                 className="bg-pink-500 text-white px-6 py-3 rounded-full font-bold text-sm shadow-lg shadow-pink-200 hover:bg-pink-600 transition disabled:opacity-50 disabled:cursor-not-allowed"
                            >
-                               {isOnline ? "開始 AI 規劃" : "資料庫連線中..."}
+                               {isOnline ? "開始 AI 規劃" : "等待資料庫連線..."}
                            </button>
                        </div>
                    </div>
@@ -402,7 +410,9 @@
                         </button>
                         
                         {!isOnline && !loading && (
-                            <p className="text-xs text-red-500 text-center mt-2">無法連線到資料庫，請檢查網路。</p>
+                            <p className="text-xs text-red-500 text-center mt-2 flex items-center justify-center gap-1">
+                                <AlertCircle className="w-3 h-3"/> 無法連線到資料庫，請重試。
+                            </p>
                         )}
                     </div>
                 </div>
@@ -722,31 +732,34 @@
         setCurrency(prev => ({ ...prev, jpy: Math.round(prev.twd / EXCHANGE_RATE) }));
       }, []);
 
-      // Auth & Sync
-      useEffect(() => {
-        const initAuth = async () => {
-          if (auth.currentUser) return;
-          try { await setPersistence(auth, browserLocalPersistence); } catch(e) { console.warn(e); }
-          
-          if (typeof window.__initial_auth_token !== 'undefined' && window.__initial_auth_token) {
-             try { await signInWithCustomToken(auth, window.__initial_auth_token); } 
-             catch { await signInAnonymously(auth); }
-          } else { 
-             await signInAnonymously(auth); 
+      // Auth Logic: Force Anonymous
+      const connectToFirebase = useCallback(async () => {
+          setIsDataLoading(true);
+          setAuthError(null);
+          try {
+              if (!auth.currentUser) {
+                  await signInAnonymously(auth);
+              }
+          } catch (error) {
+              console.error("Auth Failed", error);
+              setAuthError(`登入失敗: ${error.code}`);
+              setIsDataLoading(false);
           }
-        };
-        initAuth();
+      }, []);
+
+      useEffect(() => {
+        connectToFirebase();
         
-        // 強制 5 秒後停止 Loading，避免轉圈圈
+        // Timeout check
         const timeout = setTimeout(() => { 
-            if (isDataLoading) {
+            if (isDataLoading && !user) {
                 setIsDataLoading(false); 
-                if (!user) setAuthError("資料庫連線逾時，請檢查網路設定。");
+                setAuthError("連線逾時，請檢查網路。");
             }
         }, 5000);
 
         return () => { clearTimeout(timeout); onAuthStateChanged(auth, setUser); };
-      }, []);
+      }, [connectToFirebase]);
 
       useEffect(() => {
         if (!user) return;
@@ -776,7 +789,7 @@
           setIsDataLoading(false);
         }, (err) => {
             console.error("Sync Failed", err);
-            setAuthError(`同步失敗: ${err.code || err.message}`);
+            setAuthError(`讀取失敗: ${err.code || err.message}`);
             setIsDataLoading(false);
         });
         return () => unsubscribe();
@@ -790,7 +803,7 @@
           try {
             await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'shared_trip_data', 'main'), dataToSave, { merge: true });
             setIsSaving(false);
-          } catch (err) { console.error(err); setIsSaving(false); setAuthError("儲存失敗，請檢查權限。"); }
+          } catch (err) { console.error(err); setIsSaving(false); setAuthError("儲存失敗"); }
         }, 1000);
       }, [user]);
 
@@ -919,7 +932,7 @@
             {user ? (
                 <div className="text-[10px] text-slate-400 mt-1 flex items-center justify-center gap-1">
                     <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse"></div>
-                    已連線至共享空間 (ID: {user.uid.slice(0,4)})
+                    連線成功 (ID: {user.uid.slice(0,4)})
                 </div>
             ) : (
                 <div className="text-[10px] text-slate-400 mt-1 flex items-center justify-center gap-1">
@@ -938,6 +951,7 @@
                 generateItineraryDoc={generateItineraryDoc} loading={loading} loadingStatus={loadingStatus}
                 updateEvent={updateEvent} currentTrip={currentTrip}
                 isDataLoading={isDataLoading} isOnline={!!user} errorMessage={authError}
+                forceReconnect={connectToFirebase}
             />}
 
             {activeTab === 'food' && <FoodTab getNearbyFood={getNearbyFood} loading={loading} nearbyFood={nearbyFood} />}
