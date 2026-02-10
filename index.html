@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>日本蜜月行程管家 (氣候與定位修復版)</title>
+  <title>日本蜜月行程管家 (修復版)</title>
   <meta name="robots" content="noindex, nofollow">
   
   <!-- Tailwind CSS -->
@@ -50,7 +50,7 @@
 <body>
   <div id="initial-loader">
     <div class="spinner"></div>
-    <p class="mt-4 text-pink-600 font-bold animate-pulse">正在修復氣候與定位模組...</p>
+    <p class="mt-4 text-pink-600 font-bold animate-pulse">正在啟動行程管家...</p>
   </div>
 
   <div id="root"></div>
@@ -62,20 +62,20 @@
       Calendar, MapPin, Utensils, CloudSun, ClipboardList, Ticket, 
       Plus, Trash2, Navigation, Heart, Edit2, CheckCircle, 
       ExternalLink, Loader2, RefreshCw, Image as ImageIcon, X,
-      Languages, Sparkles, Cloud, ThermometerSun, Save, Calculator, Percent, AlertCircle, WifiOff, Users, ChevronDown, ChevronRight, RotateCcw, AlertTriangle, FileQuestion, LocateFixed
+      Languages, Sparkles, Cloud, ThermometerSun, Save, Calculator, Percent, AlertCircle, WifiOff, Users, ChevronDown, ChevronRight, RotateCcw, AlertTriangle, FileQuestion, LocateFixed, Camera, PenTool
     } from 'lucide-react';
 
     import { initializeApp } from 'firebase/app';
-    import { getAuth, signInAnonymously, onAuthStateChanged, signOut } from 'firebase/auth';
-    import { getFirestore, doc, setDoc, onSnapshot, getDoc } from 'firebase/firestore';
+    import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken, setPersistence, browserLocalPersistence } from 'firebase/auth';
+    import { getFirestore, doc, setDoc, onSnapshot, enableNetwork, disableNetwork } from 'firebase/firestore';
 
-    // AI API Key (De-identified)
+    // AI API Key
     const _k_part1 = "AIzaSyAo1gRQ";
     const _k_part2 = "_qbfVlBK4STl";
     const _k_part3 = "T2cVRtUyXzMxcOs";
     const apiKey = `${_k_part1}${_k_part2}${_k_part3}`;
     
-    // Firebase Config (trevel-b526e)
+    // Firebase Config
     const firebaseConfig = {
       apiKey: "AIzaSyDGdudzKCHGhLJ0DLL7J5TnUIkEiqIlqjc",
       authDomain: "trevel-b526e.firebaseapp.com",
@@ -90,48 +90,168 @@
     const auth = getAuth(app);
     const db = getFirestore(app);
     const appId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'default-honeymoon-app';
+
     const EXCHANGE_RATE = 0.21; 
 
     // --- AI Helper ---
     const fetchGemini = async (prompt, systemPrompt = "", setStatus) => {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-      if(setStatus) setStatus("AI 思考中...");
       
-      try {
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            systemInstruction: { parts: [{ text: systemPrompt }] },
-            generationConfig: { responseMimeType: "application/json" }
-          })
-        });
-        
-        if (!response.ok) throw new Error("AI API Error");
-        const data = await response.json();
-        let text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!text) throw new Error("Empty Response");
+      if(setStatus) setStatus("正在連線 AI 模型...");
+      
+      let delay = 1000;
+      for (let i = 0; i < 3; i++) {
+        try {
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              systemInstruction: { parts: [{ text: systemPrompt }] },
+              generationConfig: { responseMimeType: "application/json" }
+            })
+          });
+          
+          if (!response.ok) {
+              const errData = await response.json();
+              throw new Error(`AI API Error: ${errData.error?.message || response.statusText}`);
+          }
 
-        if(setStatus) setStatus("解析資料中...");
-        
-        const arrayMatch = text.match(/\[[\s\S]*\]/);
-        if (arrayMatch) return JSON.parse(arrayMatch[0]);
-        
-        const objectMatch = text.match(/\{[\s\S]*\}/);
-        if (objectMatch) return JSON.parse(objectMatch[0]);
+          if(setStatus) setStatus("AI 正在思考並撰寫 JSON...");
+          
+          const data = await response.json();
+          let text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          
+          if (!text) throw new Error("AI 回傳內容為空");
 
-        text = text.replace(/^```json\s*/, "").replace(/^```\s*/, "").replace(/```$/, "").trim();
-        return JSON.parse(text);
+          if(setStatus) setStatus("正在解析資料...");
+          console.log("Raw AI Response:", text); 
 
-      } catch (error) {
-        console.error(error);
-        throw error;
+          // Robust Parsing
+          const arrayMatch = text.match(/\[[\s\S]*\]/);
+          if (arrayMatch) return JSON.parse(arrayMatch[0]);
+          
+          const objectMatch = text.match(/\{[\s\S]*\}/);
+          if (objectMatch) return JSON.parse(objectMatch[0]);
+
+          text = text.replace(/^```json\s*/, "").replace(/^```\s*/, "").replace(/```$/, "").trim();
+          return JSON.parse(text);
+
+        } catch (error) {
+          console.warn(`Attempt ${i+1} failed:`, error);
+          if (i === 2) throw error;
+          if(setStatus) setStatus(`連線不穩，重試中 (${i+1}/3)...`);
+          await new Promise(r => setTimeout(r, delay));
+          delay *= 1.5;
+        }
       }
     };
 
     // --- COMPONENTS ---
-    const NewPlannerTab = memo(({ trips, selectedTripId, setSelectedTripId, deleteTrip, onAddTrip, loading, loadingStatus }) => {
+
+    const WeatherCard = memo(({ info, onDelete }) => (
+      <div className="bg-gradient-to-br from-blue-400 to-blue-600 rounded-2xl p-5 text-white shadow-md relative overflow-hidden mb-4 animate-in slide-in-from-top-2">
+        <button onClick={() => onDelete(info.id)} className="absolute top-2 right-2 text-white/80 hover:text-white bg-white/20 rounded-full p-1"><X className="w-4 h-4"/></button>
+        <div className="flex justify-between items-start mb-3">
+            <div>
+                <h3 className="text-xl font-bold flex items-center gap-2">{info.location}</h3>
+                <span className="text-sm opacity-90">{info.temp}</span>
+            </div>
+            <CloudSun className="w-10 h-10 opacity-80" />
+        </div>
+        
+        <div className="space-y-2">
+            <div className="bg-white/20 p-2 rounded-lg">
+                <span className="text-xs font-bold block opacity-70 mb-1">🌤 氣候</span>
+                <p className="text-sm leading-tight">{info.weather}</p>
+            </div>
+            <div className="bg-white/20 p-2 rounded-lg">
+                <span className="text-xs font-bold block opacity-70 mb-1">👕 建議穿搭</span>
+                <p className="text-sm leading-tight">{info.clothing}</p>
+            </div>
+            <div className="bg-white/20 p-2 rounded-lg">
+                <span className="text-xs font-bold block opacity-70 mb-1">⚠️ 注意事項</span>
+                <p className="text-sm leading-tight">{info.notes}</p>
+            </div>
+        </div>
+      </div>
+    ));
+
+    const DaySection = memo(({ day, dIdx, currentTripId, updateEvent }) => {
+        const [isExpanded, setIsExpanded] = useState(true);
+
+        return (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden mb-4">
+                <div 
+                    className="bg-pink-50/50 p-3 flex justify-between items-center cursor-pointer select-none"
+                    onClick={() => setIsExpanded(!isExpanded)}
+                >
+                    <div className="flex items-center gap-2">
+                        {isExpanded ? <ChevronDown className="w-4 h-4 text-pink-400" /> : <ChevronRight className="w-4 h-4 text-pink-400" />}
+                        <h3 className="font-bold text-slate-800 flex flex-col sm:flex-row sm:gap-2 text-sm sm:text-base">
+                            <span className="text-pink-600">Day {day.day}</span>
+                            <span className="font-normal text-slate-500">{day.date} - {day.title}</span>
+                        </h3>
+                    </div>
+                </div>
+                
+                {isExpanded && (
+                    <div className="p-4 relative">
+                        <div className="absolute left-[27px] top-4 bottom-4 w-0.5 bg-slate-100"></div>
+                        {(day.events || []).map((event, eIdx) => (
+                            <div key={eIdx} className="flex gap-4 relative mb-6 last:mb-0 group">
+                                <div className="w-12 flex-shrink-0 flex flex-col items-end pt-1 z-10 bg-white">
+                                    <input 
+                                        type="text" 
+                                        value={event.time || ''} 
+                                        onChange={(e) => updateEvent(currentTripId, dIdx, eIdx, 'time', e.target.value)}
+                                        className="text-xs font-bold text-slate-400 w-full text-right focus:text-pink-500 focus:outline-none bg-transparent"
+                                    />
+                                </div>
+                                <div className="absolute left-[11px] top-2 w-2.5 h-2.5 rounded-full bg-pink-300 border-2 border-white shadow-sm z-20"></div>
+                                <div className="flex-grow bg-slate-50/50 rounded-xl p-3 border border-slate-100 hover:border-pink-200 hover:shadow-sm transition-all group-hover:bg-white">
+                                    <div className="flex items-start gap-2 mb-1">
+                                        <input 
+                                            type="text" 
+                                            value={event.activity || ''} 
+                                            onChange={(e) => updateEvent(currentTripId, dIdx, eIdx, 'activity', e.target.value)}
+                                            className="w-full font-bold text-slate-700 text-sm focus:outline-none bg-transparent border-b border-transparent focus:border-pink-200"
+                                        />
+                                    </div>
+                                    <div className="flex items-center gap-1 text-xs text-blue-500 mb-2">
+                                        <MapPin className="w-3 h-3 flex-shrink-0" />
+                                        <input 
+                                            type="text"
+                                            value={event.location || ''} 
+                                            onChange={(e) => updateEvent(currentTripId, dIdx, eIdx, 'location', e.target.value)}
+                                            className="w-full bg-transparent focus:outline-none border-b border-transparent focus:border-pink-200 text-blue-500 placeholder-blue-300 truncate"
+                                            placeholder="輸入地點..."
+                                        />
+                                        <button 
+                                            onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.location)}`, '_blank')}
+                                            className="p-1 hover:bg-blue-50 rounded-full"
+                                        >
+                                            <ExternalLink className="w-3 h-3" />
+                                        </button>
+                                    </div>
+                                    <textarea 
+                                        value={event.note || ''} 
+                                        onChange={(e) => updateEvent(currentTripId, dIdx, eIdx, 'note', e.target.value)}
+                                        className="w-full text-xs text-slate-400 focus:outline-none bg-transparent resize-none focus:text-slate-600"
+                                        placeholder="備註..."
+                                        rows="1"
+                                        onInput={(e) => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; }}
+                                    />
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        );
+    });
+
+    const NewPlannerTab = memo(({ trips, selectedTripId, setSelectedTripId, deleteTrip, onAddTrip, loading, loadingStatus, updateEvent }) => {
         const [showModal, setShowModal] = useState(false);
         const [form, setForm] = useState({ location: '北海道', days: 5, startDate: '2026-03-04' });
 
@@ -192,34 +312,13 @@
 
                 <div className="space-y-4">
                     {currentTrip?.itineraryData?.map((day, idx) => (
-                        <div key={idx} className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-                            <div className="bg-pink-50/50 p-3 border-b border-pink-50 flex items-center gap-2">
-                                <span className="bg-pink-100 text-pink-600 text-xs font-bold px-2 py-1 rounded-lg">Day {day.day}</span>
-                                <span className="text-sm font-medium text-slate-700">{day.date}</span>
-                                <span className="text-sm font-bold text-slate-800 truncate flex-1 text-right">{day.title}</span>
-                            </div>
-                            <div className="p-3 space-y-4">
-                                {day.events?.map((ev, eIdx) => (
-                                    <div key={eIdx} className="flex gap-3 relative pl-2">
-                                        <div className="absolute left-[3px] top-2 bottom-[-16px] w-[2px] bg-slate-100 last:hidden"></div>
-                                        <div className="absolute left-0 top-2 w-2 h-2 rounded-full bg-pink-300"></div>
-                                        
-                                        <div className="flex-1">
-                                            <div className="flex justify-between items-start mb-1">
-                                                <span className="text-xs font-mono text-slate-400 bg-slate-50 px-1 rounded">{ev.time}</span>
-                                            </div>
-                                            <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                                                <div className="font-bold text-slate-700 mb-1">{ev.activity}</div>
-                                                <div className="flex items-center gap-1 text-xs text-blue-500 mb-2 cursor-pointer" onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(ev.location)}`, '_blank')}>
-                                                    <MapPin className="w-3 h-3"/> {ev.location}
-                                                </div>
-                                                <div className="text-xs text-slate-500">{ev.note}</div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
+                        <DaySection 
+                            key={`${currentTrip.id}-${idx}`}
+                            day={day}
+                            dIdx={idx}
+                            currentTripId={currentTrip.id}
+                            updateEvent={updateEvent}
+                        />
                     ))}
                 </div>
 
@@ -246,37 +345,69 @@
         );
     });
 
-    // --- Weather Card (Optimized) ---
-    const WeatherCard = memo(({ info, onDelete }) => (
-      <div className="bg-gradient-to-br from-blue-400 to-blue-600 rounded-2xl p-5 text-white shadow-md relative overflow-hidden mb-4">
-        <button onClick={() => onDelete(info.id)} className="absolute top-2 right-2 text-white/80 hover:text-white bg-white/20 rounded-full p-1"><X className="w-4 h-4"/></button>
-        <div className="flex justify-between items-start mb-3">
-            <div>
-                <h3 className="text-xl font-bold flex items-center gap-2">{info.location}</h3>
-                <span className="text-sm opacity-90">{info.temp}</span>
-            </div>
-            <CloudSun className="w-10 h-10 opacity-80" />
+    const FoodTab = memo(({ getNearbyFood, getNearbySpots, loading, nearbyFood, foodStatus, exploreMode, setExploreMode }) => (
+      <div className="space-y-4 animate-in slide-in-from-right duration-300">
+        <div className="bg-white p-5 rounded-2xl shadow-sm space-y-3 text-center relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-orange-300 to-orange-500"></div>
+          <h2 className="text-lg font-bold flex items-center justify-center gap-2 text-orange-600"><MapPin className="w-5 h-5" /> 探索周邊 (美食 & 景點)</h2>
+          
+          <div className="flex gap-2">
+            <button 
+                onClick={() => { setExploreMode('food'); getNearbyFood(); }}
+                disabled={loading}
+                className={`flex-1 py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-sm transition active:scale-95 ${exploreMode === 'food' ? 'bg-orange-500 text-white' : 'bg-orange-100 text-orange-600'}`}
+            >
+                {loading && exploreMode === 'food' ? <Loader2 className="animate-spin w-4 h-4"/> : <Utensils className="w-4 h-4" />} 
+                找美食
+            </button>
+            <button 
+                onClick={() => { setExploreMode('spots'); getNearbySpots(); }}
+                disabled={loading}
+                className={`flex-1 py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-sm transition active:scale-95 ${exploreMode === 'spots' ? 'bg-purple-500 text-white' : 'bg-purple-100 text-purple-600'}`}
+            >
+                {loading && exploreMode === 'spots' ? <Loader2 className="animate-spin w-4 h-4"/> : <Camera className="w-4 h-4" />} 
+                找景點
+            </button>
+          </div>
+          
+          {foodStatus && <p className="text-xs text-slate-500 font-medium animate-pulse">{foodStatus}</p>}
         </div>
-        
-        <div className="space-y-2">
-            <div className="bg-white/20 p-2 rounded-lg">
-                <span className="text-xs font-bold block opacity-70 mb-1">🌤 氣候</span>
-                <p className="text-sm leading-tight">{info.weather}</p>
+
+        <div className="grid gap-3">
+          {nearbyFood.map((item, idx) => (
+            <div key={idx} className={`bg-white p-3 rounded-2xl shadow-sm flex gap-3 border-l-4 ${item.type === 'spot' ? 'border-purple-400' : 'border-orange-400'} animate-in slide-in-from-bottom-2`}>
+              <div className="flex-grow">
+                <div className="flex justify-between items-start">
+                  <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                      {item.name}
+                      {item.type === 'spot' && <Camera className="w-3 h-3 text-purple-400"/>}
+                  </h3>
+                  {item.rating && <span className="text-orange-500 font-extrabold flex items-center gap-1 text-sm">★ {item.rating}</span>}
+                </div>
+                <p className="text-xs text-slate-500 mb-1">{item.subType || item.type} · <span className="italic">「{item.reason || item.description}」</span></p>
+                {item.tips && <p className="text-xs text-purple-600 bg-purple-50 p-1 rounded inline-block mb-1">💡 {item.tips}</p>}
+                <button 
+                    onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.name + ' ' + (item.address || ''))}`, '_blank')}
+                    className={`text-xs flex items-center gap-1 hover:underline px-2 py-1 rounded-full w-fit mt-2 ${item.type === 'spot' ? 'text-purple-600 bg-purple-50' : 'text-blue-500 bg-blue-50'}`}
+                >
+                  <MapPin className="w-3 h-3" /> 導航前往
+                </button>
+              </div>
             </div>
-            <div className="bg-white/20 p-2 rounded-lg">
-                <span className="text-xs font-bold block opacity-70 mb-1">👕 建議穿搭</span>
-                <p className="text-sm leading-tight">{info.clothing}</p>
-            </div>
-            <div className="bg-white/20 p-2 rounded-lg">
-                <span className="text-xs font-bold block opacity-70 mb-1">⚠️ 注意事項</span>
-                <p className="text-sm leading-tight">{info.notes}</p>
-            </div>
+          ))}
+          {nearbyFood.length === 0 && !loading && (
+             <div className="text-center text-slate-400 py-10 bg-white rounded-2xl border border-dashed border-slate-200">
+                 點擊上方按鈕開始探索
+             </div>
+          )}
         </div>
       </div>
     ));
 
-    const PrepTab = memo(({ packingList, setPackingList, deletePackingItem, newItemText, setNewItemText, addPackingItem, memos, setMemos, suggestPackingItems, suggestingItems, weatherInfos, addWeatherLocation, isAddingWeather, deleteWeatherLocation }) => {
+    const PrepTab = memo(({ packingList, setPackingList, deletePackingItem, newItemText, setNewItemText, addPackingItem, memos, setMemos, suggestPackingItems, suggestingItems, weatherInfos, addWeatherLocation, isAddingWeather, deleteWeatherLocation, onGenerateJournal, journalLoading }) => {
       const [weatherCity, setWeatherCity] = useState('');
+      const [journalKeywords, setJournalKeywords] = useState('');
+
       return (
         <div className="space-y-6 animate-in slide-in-from-right duration-300">
           <section>
@@ -287,12 +418,23 @@
                 <WeatherCard key={info.id} info={info} onDelete={deleteWeatherLocation} />
              ))}
              <div className="flex gap-2 bg-white p-3 rounded-2xl shadow-sm border border-blue-100">
-               <input type="text" placeholder="輸入城市 (如: 京都)" value={weatherCity} onChange={e => setWeatherCity(e.target.value)} className="flex-grow p-2 text-sm border rounded-xl focus:outline-none focus:border-blue-400"/>
-               <button onClick={() => { if(weatherCity) { addWeatherLocation(weatherCity); setWeatherCity(''); }}} disabled={isAddingWeather || !weatherCity} className="bg-blue-100 text-blue-600 px-4 rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-blue-200 disabled:opacity-50">
+               <input 
+                 type="text" 
+                 placeholder="輸入城市 (如: 京都)" 
+                 value={weatherCity}
+                 onChange={e => setWeatherCity(e.target.value)}
+                 className="flex-grow p-2 text-sm border rounded-xl focus:outline-none focus:border-blue-400"
+               />
+               <button 
+                 onClick={() => { if(weatherCity) { addWeatherLocation(weatherCity); setWeatherCity(''); }}}
+                 disabled={isAddingWeather || !weatherCity}
+                 className="bg-blue-100 text-blue-600 px-4 rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-blue-200 disabled:opacity-50"
+               >
                  {isAddingWeather ? <Loader2 className="w-4 h-4 animate-spin"/> : <Plus className="w-4 h-4"/>} 新增
                </button>
              </div>
           </section>
+
           <section className="bg-white rounded-2xl shadow-sm p-5 border border-slate-100">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-bold flex items-center gap-2 text-green-700"><ClipboardList className="w-5 h-5" /> 行前準備清單</h2>
@@ -314,11 +456,33 @@
               <button onClick={addPackingItem} className="bg-green-100 text-green-600 p-2 rounded-xl hover:bg-green-200 transition"><Plus className="w-5 h-5" /></button>
             </div>
           </section>
+
           <section className="bg-white rounded-2xl shadow-sm p-5 border border-slate-100">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-bold flex items-center gap-2 text-purple-700"><Edit2 className="w-5 h-5" /> 旅遊備忘錄</h2>
               <button onClick={() => setMemos([...memos, { id: Date.now(), text: '' }])} className="p-2 bg-purple-100 text-purple-600 rounded-lg hover:bg-purple-200 transition"><Plus className="w-4 h-4" /></button>
             </div>
+            
+            <div className="bg-purple-50 p-4 rounded-xl mb-4 border border-purple-100">
+                <h3 className="text-xs font-bold text-purple-600 mb-2 flex items-center gap-1"><Sparkles className="w-3 h-3"/> AI 蜜月日記助手</h3>
+                <div className="flex gap-2">
+                    <input 
+                        type="text" 
+                        placeholder="今天的心情/關鍵字 (例: 小樽運河, 好冷, 超浪漫)" 
+                        value={journalKeywords}
+                        onChange={(e) => setJournalKeywords(e.target.value)}
+                        className="flex-grow p-2 text-sm border rounded-lg focus:outline-none focus:border-purple-400"
+                    />
+                    <button 
+                        onClick={() => { if(journalKeywords) { onGenerateJournal(journalKeywords); setJournalKeywords(''); }}}
+                        disabled={journalLoading || !journalKeywords}
+                        className="bg-purple-500 text-white px-3 py-1 rounded-lg text-xs font-bold whitespace-nowrap hover:bg-purple-600 disabled:opacity-50"
+                    >
+                        {journalLoading ? <Loader2 className="w-4 h-4 animate-spin"/> : "生成日記"}
+                    </button>
+                </div>
+            </div>
+
             <div className="space-y-3">
               {memos.map(memo => (
                 <div key={memo.id} className="relative group">
@@ -386,35 +550,6 @@
        );
     });
 
-    const FoodTab = memo(({ getNearbyFood, loading, nearbyFood, foodStatus }) => (
-      <div className="space-y-4 animate-in slide-in-from-right duration-300">
-        <div className="bg-white p-5 rounded-2xl shadow-sm space-y-3 text-center relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-orange-300 to-orange-500"></div>
-          <h2 className="text-lg font-bold flex items-center justify-center gap-2 text-orange-600"><Utensils className="w-5 h-5" /> 附近美食探索</h2>
-          <button onClick={getNearbyFood} disabled={loading} className="w-full bg-gradient-to-r from-orange-400 to-orange-500 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition active:scale-95 disabled:opacity-70">
-            {loading ? <Loader2 className="animate-spin" /> : <Navigation className="w-5 h-5" />} 搜尋附近美食
-          </button>
-          {foodStatus && <p className="text-xs text-orange-600 font-medium animate-pulse">{foodStatus}</p>}
-        </div>
-        <div className="grid gap-3">
-          {nearbyFood.map((food, idx) => (
-            <div key={idx} className="bg-white p-3 rounded-2xl shadow-sm flex gap-3 border-l-4 border-orange-400">
-              <div className="flex-grow">
-                <div className="flex justify-between items-start">
-                  <h3 className="font-bold text-slate-800">{food.name}</h3>
-                  <span className="text-orange-500 font-extrabold flex items-center gap-1 text-sm">★ {food.rating}</span>
-                </div>
-                <p className="text-xs text-slate-500 mb-1">{food.type} · <span className="italic">「{food.reason}」</span></p>
-                <button onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(food.name + ' ' + food.address)}`, '_blank')} className="text-xs text-blue-500 flex items-center gap-1 hover:underline bg-blue-50 px-2 py-1 rounded-full w-fit mt-2">
-                  <MapPin className="w-3 h-3" /> 導航至：{food.address}
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    ));
-
     const TranslateTab = memo(({ transInput, setTransInput, handleTranslate, translating, transResult }) => (
         <div className="space-y-6 animate-in slide-in-from-right duration-300">
           <div className="bg-indigo-600 rounded-3xl p-6 text-white shadow-lg relative overflow-hidden">
@@ -465,10 +600,14 @@
       const [transResult, setTransResult] = useState(null);
       const [translating, setTranslating] = useState(false);
       const [currency, setCurrency] = useState({ twd: 100, jpy: 0 });
+      const [exploreMode, setExploreMode] = useState('food'); // 'food' or 'spots'
       
       // Trip Generation
       const [tripLoading, setTripLoading] = useState(false);
       const [tripStatus, setTripStatus] = useState('');
+      
+      // Journal Generation
+      const [journalLoading, setJournalLoading] = useState(false);
 
       useEffect(() => {
         document.getElementById('initial-loader')?.remove();
@@ -524,7 +663,6 @@
       // Trigger Save when data changes
       useEffect(() => {
           if (status === 'ready') {
-              // Debounce could be added here, but for simplicity direct save
               saveToCloud({ trips, packingList, memos, coupons, weatherInfos });
           }
       }, [trips, packingList, memos, coupons, weatherInfos, status]);
@@ -550,6 +688,24 @@
               setTripLoading(false);
           }
       };
+      
+      const updateEvent = useCallback((tripId, dayIdx, eventIdx, field, value) => {
+        setTrips(prev => prev.map(trip => {
+          if (trip.id === tripId) {
+            // Safety Check
+            if (!trip.itineraryData || !trip.itineraryData[dayIdx] || !trip.itineraryData[dayIdx].events) return trip;
+
+            const newData = [...trip.itineraryData];
+            const newDay = {...newData[dayIdx]};
+            const newEvents = [...newDay.events];
+            newEvents[eventIdx] = {...newEvents[eventIdx], [field]: value};
+            newDay.events = newEvents;
+            newData[dayIdx] = newDay;
+            return { ...trip, itineraryData: newData };
+          }
+          return trip;
+        }));
+      }, []);
 
       const deleteTrip = (id) => {
           setTrips(prev => prev.filter(t => t.id !== id));
@@ -557,64 +713,69 @@
       };
 
       const getNearbyFood = () => {
-          if(!navigator.geolocation) return alert("您的瀏覽器不支援或已封鎖定位功能");
-          
+          if(!navigator.geolocation) return alert("無定位權限");
           setFoodLoading(true);
-          setFoodStatus("正在定位中...");
-
-          navigator.geolocation.getCurrentPosition(
-            async (pos) => {
-                const { latitude, longitude } = pos.coords;
-                setFoodStatus(`定位成功 (${latitude.toFixed(2)}, ${longitude.toFixed(2)})，正在搜尋美食...`);
-                try {
-                    const res = await fetchGemini(`推薦 (${latitude}, ${longitude}) 附近5家美食。
-                    請嚴格輸出 JSON 陣列，格式: [{name, rating, type, reason, address}]`);
-                    setNearbyFood(res);
-                    setFoodStatus("");
-                } catch(e){ 
-                    setFoodStatus("搜尋失敗");
-                    alert("搜尋失敗: " + e.message); 
-                } finally { 
-                    setFoodLoading(false); 
-                }
-            },
-            (err) => {
-                console.error(err);
-                setFoodLoading(false);
-                setFoodStatus("定位失敗");
-                let msg = "無法抓取位置。";
-                if(err.code === 1) msg += " (權限被拒絕)";
-                else if(err.code === 2) msg += " (位置無法取得)";
-                else if(err.code === 3) msg += " (連線逾時)";
-                alert(msg + " 請確認您已允許瀏覽器存取位置資訊 (若是本機檔案可能受限，請使用 localhost 或 https)。");
-            },
-            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-          );
+          setFoodStatus("定位中...");
+          navigator.geolocation.getCurrentPosition(async pos => {
+              const { latitude, longitude } = pos.coords;
+              setFoodStatus(`定位成功，搜尋周邊美食...`);
+              try {
+                  const res = await fetchGemini(`推薦 (${latitude},${longitude}) 附近5家美食。 請嚴格輸出 JSON 陣列，格式: [{name, rating, type, reason, address, tips}]`);
+                  const enhancedRes = (Array.isArray(res) ? res : []).map(item => ({ ...item, type: 'food', subType: item.type }));
+                  setNearbyFood(enhancedRes);
+                  setFoodStatus("");
+              } catch(e){ 
+                  alert("搜尋失敗: " + e.message); 
+                  setFoodStatus("搜尋失敗");
+              } finally { 
+                  setFoodLoading(false); 
+              }
+          }, (err) => {
+              setFoodLoading(false);
+              setFoodStatus("定位失敗");
+              alert("定位失敗: " + err.message);
+          });
       };
-
-      const addWeatherLocation = async (city, deleteId = null) => {
-          if (deleteId) {
-              setWeatherInfos(prev => prev.filter(i => i.id !== deleteId));
-              return;
-          }
-          if (!city) return;
-          
-          setIsAddingWeather(true);
+      
+      const getNearbySpots = () => {
+          if(!navigator.geolocation) return alert("無定位權限");
+          setFoodLoading(true);
+          setFoodStatus("定位中...");
+          navigator.geolocation.getCurrentPosition(async pos => {
+              const { latitude, longitude } = pos.coords;
+              setFoodStatus(`定位成功，搜尋浪漫景點...`);
+              try {
+                  const res = await fetchGemini(`推薦 (${latitude},${longitude}) 附近3個適合蜜月拍照或浪漫約會的景點。 請嚴格輸出 JSON 陣列，格式: [{name, rating, type: "spot", description, address, tips}]`);
+                  const enhancedRes = (Array.isArray(res) ? res : []).map(item => ({ ...item, type: 'spot', subType: '景點' }));
+                  setNearbyFood(enhancedRes); // Reuse nearbyFood state for spots
+                  setFoodStatus("");
+              } catch(e){ 
+                  alert("搜尋失敗: " + e.message); 
+                  setFoodStatus("搜尋失敗");
+              } finally { 
+                  setFoodLoading(false); 
+              }
+          }, (err) => {
+              setFoodLoading(false);
+              setFoodStatus("定位失敗");
+              alert("定位失敗: " + err.message);
+          });
+      };
+      
+      const handleGenerateJournal = async (keywords) => {
+          setJournalLoading(true);
           try {
-              const result = await fetchGemini(
-                  `請分析 ${city} 3月份的天氣狀況。
-                  請嚴格輸出 JSON 格式，包含欄位: 
-                  location (城市名), 
-                  temp (氣溫範圍), 
-                  weather (氣候簡述), 
-                  clothing (建議穿搭, 簡短), 
-                  notes (注意事項, 簡短)`
+              const res = await fetchGemini(
+                  `請根據關鍵字「${keywords}」寫一篇繁體中文的蜜月日記，語氣浪漫、溫馨，約50-80字。輸出 JSON 格式: { "content": "日記內容..." }`
               );
-              setWeatherInfos(prev => [...prev, { id: Date.now(), ...result }]);
-          } catch (e) { 
-              alert("獲取天氣失敗: " + e.message); 
-          } finally { 
-              setIsAddingWeather(false); 
+              if (res && res.content) {
+                  const newMemo = { id: Date.now(), text: res.content };
+                  setMemos(prev => [...prev, newMemo]);
+              }
+          } catch (e) {
+              alert("生成失敗");
+          } finally {
+              setJournalLoading(false);
           }
       };
 
@@ -648,9 +809,18 @@
                 onAddTrip={handleAddTrip}
                 loading={tripLoading}
                 loadingStatus={tripStatus}
+                updateEvent={updateEvent}
             />}
 
-            {activeTab === 'food' && <FoodTab getNearbyFood={getNearbyFood} loading={foodLoading} nearbyFood={nearbyFood} foodStatus={foodStatus} />}
+            {activeTab === 'food' && <FoodTab 
+                getNearbyFood={getNearbyFood} 
+                getNearbySpots={getNearbySpots}
+                loading={foodLoading} 
+                nearbyFood={nearbyFood} 
+                foodStatus={foodStatus}
+                exploreMode={exploreMode}
+                setExploreMode={setExploreMode}
+            />}
             
             {activeTab === 'prep' && <PrepTab 
                 packingList={packingList} setPackingList={setPackingList} deletePackingItem={(id)=>setPackingList(p=>p.filter(i=>i.id!==id))}
@@ -669,9 +839,20 @@
                     } finally { setSuggestingItems(false); }
                 }} suggestingItems={suggestingItems}
                 weatherInfos={weatherInfos} 
-                addWeatherLocation={addWeatherLocation}
-                deleteWeatherLocation={(id) => addWeatherLocation(null, id)}
+                addWeatherLocation={async (city, delId)=>{
+                    if(delId) return setWeatherInfos(p=>p.filter(i=>i.id!==delId));
+                    setIsAddingWeather(true);
+                    try { 
+                        const res = await fetchGemini(`${city} 3月天氣. JSON format: {location, temp, weather, clothing, notes}`); 
+                        setWeatherInfos(p=>[...p, {id:Date.now(), ...res}]); 
+                    } catch(e) {
+                        alert("無法獲取天氣資訊: " + e.message);
+                    } finally { setIsAddingWeather(false); }
+                }} 
+                deleteWeatherLocation={(id) => setWeatherInfos(p=>p.filter(i=>i.id!==id))}
                 isAddingWeather={isAddingWeather}
+                onGenerateJournal={handleGenerateJournal}
+                journalLoading={journalLoading}
             />}
 
             {activeTab === 'coupons' && <CouponsTab 
@@ -701,7 +882,7 @@
                     {tab==='prep' && <ClipboardList className="w-5 h-5"/>}
                     {tab==='coupons' && <Ticket className="w-5 h-5"/>}
                     {tab==='translate' && <Languages className="w-5 h-5"/>}
-                    <span className="text-[10px]">{tab==='planner'?'行程':tab==='food'?'美食':tab==='prep'?'準備':tab==='coupons'?'優惠':'翻譯'}</span>
+                    <span className="text-[10px]">{tab==='planner'?'行程':tab==='food'?'探索':tab==='prep'?'準備':tab==='coupons'?'優惠':'翻譯'}</span>
                  </button>
              ))}
           </nav>
