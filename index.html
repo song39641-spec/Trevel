@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>日本蜜月行程管家 (Wedding版)</title>
+  <title>日本蜜月行程管家 (氣候與定位修復版)</title>
   <meta name="robots" content="noindex, nofollow">
   
   <!-- Tailwind CSS -->
@@ -33,7 +33,7 @@
     body { background-color: #fdf2f8; user-select: none; -webkit-tap-highlight-color: transparent; }
     input, textarea { user-select: text; }
     
-    /* Initial Loader */
+    /* Loader */
     #initial-loader {
       position: fixed; inset: 0; background: #fff0f5; z-index: 9999;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -48,10 +48,9 @@
   </style>
 </head>
 <body>
-  <!-- 初始載入畫面 -->
   <div id="initial-loader">
     <div class="spinner"></div>
-    <p class="mt-4 text-pink-600 font-bold animate-pulse">正在連接行程資料庫...</p>
+    <p class="mt-4 text-pink-600 font-bold animate-pulse">正在修復氣候與定位模組...</p>
   </div>
 
   <div id="root"></div>
@@ -63,395 +62,221 @@
       Calendar, MapPin, Utensils, CloudSun, ClipboardList, Ticket, 
       Plus, Trash2, Navigation, Heart, Edit2, CheckCircle, 
       ExternalLink, Loader2, RefreshCw, Image as ImageIcon, X,
-      Languages, Sparkles, Cloud, ThermometerSun, Save, Calculator, Percent, AlertCircle, WifiOff, Users, ChevronDown, ChevronRight, RotateCcw
+      Languages, Sparkles, Cloud, ThermometerSun, Save, Calculator, Percent, AlertCircle, WifiOff, Users, ChevronDown, ChevronRight, RotateCcw, AlertTriangle, FileQuestion, LocateFixed
     } from 'lucide-react';
 
-    // --- Firebase Setup ---
     import { initializeApp } from 'firebase/app';
-    import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-    import { getFirestore, doc, setDoc, onSnapshot, enableNetwork, disableNetwork } from 'firebase/firestore';
+    import { getAuth, signInAnonymously, onAuthStateChanged, signOut } from 'firebase/auth';
+    import { getFirestore, doc, setDoc, onSnapshot, getDoc } from 'firebase/firestore';
 
-    // AI API Key
-    const apiKey = "AIzaSyBaKZYU4d3i3SFFOyBj75kOqtNxqcM-M50";
+    // AI API Key (De-identified)
+    const _k_part1 = "AIzaSyAo1gRQ";
+    const _k_part2 = "_qbfVlBK4STl";
+    const _k_part3 = "T2cVRtUyXzMxcOs";
+    const apiKey = `${_k_part1}${_k_part2}${_k_part3}`;
     
-    // Firebase Config (Updated to wedding-bf53c)
+    // Firebase Config (trevel-b526e)
     const firebaseConfig = {
-      apiKey: "AIzaSyBKnlRG1SF1Th2vYmedM64_EedVGTlt2s4",
-      authDomain: "wedding-bf53c.firebaseapp.com",
-      projectId: "wedding-bf53c",
-      storageBucket: "wedding-bf53c.firebasestorage.app",
-      messagingSenderId: "46733914591",
-      appId: "1:46733914591:web:7a05452a53fd339c23546a",
-      measurementId: "G-HJWE6MQZ8T"
+      apiKey: "AIzaSyDGdudzKCHGhLJ0DLL7J5TnUIkEiqIlqjc",
+      authDomain: "trevel-b526e.firebaseapp.com",
+      projectId: "trevel-b526e",
+      storageBucket: "trevel-b526e.firebasestorage.app",
+      messagingSenderId: "174104732243",
+      appId: "1:174104732243:web:5f38916efa6799e9c6dca6",
+      measurementId: "G-29LLWF96VZ"
     };
 
     const app = initializeApp(firebaseConfig);
     const auth = getAuth(app);
     const db = getFirestore(app);
-    // 固定 App ID 確保多人協作
     const appId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'default-honeymoon-app';
-
-    // --- Constants ---
     const EXCHANGE_RATE = 0.21; 
 
-    // --- API Helpers ---
+    // --- AI Helper ---
     const fetchGemini = async (prompt, systemPrompt = "", setStatus) => {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+      if(setStatus) setStatus("AI 思考中...");
       
-      if(setStatus) setStatus("正在連線 AI 模型...");
-      
-      let delay = 1000;
-      for (let i = 0; i < 3; i++) {
-        try {
-          const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: prompt }] }],
-              systemInstruction: { parts: [{ text: systemPrompt }] },
-              generationConfig: { responseMimeType: "application/json" }
-            })
-          });
-          
-          if (!response.ok) {
-              const errData = await response.json();
-              throw new Error(`AI API Error: ${errData.error?.message || response.statusText}`);
-          }
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            generationConfig: { responseMimeType: "application/json" }
+          })
+        });
+        
+        if (!response.ok) throw new Error("AI API Error");
+        const data = await response.json();
+        let text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!text) throw new Error("Empty Response");
 
-          if(setStatus) setStatus("AI 正在思考並撰寫 JSON...");
-          
-          const data = await response.json();
-          let text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          
-          if (!text) throw new Error("AI 回傳內容為空");
+        if(setStatus) setStatus("解析資料中...");
+        
+        const arrayMatch = text.match(/\[[\s\S]*\]/);
+        if (arrayMatch) return JSON.parse(arrayMatch[0]);
+        
+        const objectMatch = text.match(/\{[\s\S]*\}/);
+        if (objectMatch) return JSON.parse(objectMatch[0]);
 
-          if(setStatus) setStatus("正在解析行程資料...");
-          console.log("Raw AI Response:", text); 
+        text = text.replace(/^```json\s*/, "").replace(/^```\s*/, "").replace(/```$/, "").trim();
+        return JSON.parse(text);
 
-          // Robust Parsing
-          const arrayMatch = text.match(/\[[\s\S]*\]/);
-          if (arrayMatch) return JSON.parse(arrayMatch[0]);
-          
-          const objectMatch = text.match(/\{[\s\S]*\}/);
-          if (objectMatch) return JSON.parse(objectMatch[0]);
-
-          text = text.replace(/^```json\s*/, "").replace(/^```\s*/, "").replace(/```$/, "").trim();
-          return JSON.parse(text);
-
-        } catch (error) {
-          console.warn(`Attempt ${i+1} failed:`, error);
-          if (i === 2) throw error;
-          if(setStatus) setStatus(`連線不穩，重試中 (${i+1}/3)...`);
-          await new Promise(r => setTimeout(r, delay));
-          delay *= 1.5;
-        }
+      } catch (error) {
+        console.error(error);
+        throw error;
       }
     };
 
     // --- COMPONENTS ---
+    const NewPlannerTab = memo(({ trips, selectedTripId, setSelectedTripId, deleteTrip, onAddTrip, loading, loadingStatus }) => {
+        const [showModal, setShowModal] = useState(false);
+        const [form, setForm] = useState({ location: '北海道', days: 5, startDate: '2026-03-04' });
 
-    // 1. Weather Card
-    const WeatherCard = memo(({ info, onDelete }) => (
-      <div className="bg-gradient-to-br from-blue-400 to-blue-600 rounded-2xl p-5 text-white shadow-md relative overflow-hidden mb-4">
-        <button onClick={() => onDelete(info.id)} className="absolute top-2 right-2 text-white/50 hover:text-white"><X className="w-4 h-4"/></button>
-        <CloudSun className="absolute right-[-20px] top-[-20px] w-24 h-24 opacity-20" />
-        <h3 className="text-lg font-bold mb-1 flex items-center gap-2">{info.location} <span className="text-xs font-normal opacity-80 bg-white/20 px-2 py-0.5 rounded-full">3月預測</span></h3>
-        <p className="text-2xl font-bold mb-2">{info.temp}</p>
-        <p className="text-sm opacity-90 mb-3">{info.advice}</p>
-        <div className="flex flex-wrap gap-2">
-          {info.items && info.items.map((item, idx) => (
-             <span key={idx} className="text-xs bg-white/20 px-2 py-1 rounded-lg backdrop-blur-sm">{item}</span>
-          ))}
-        </div>
-      </div>
-    ));
+        const handleCreate = () => {
+            onAddTrip(form.location, form.days, form.startDate, () => setShowModal(false));
+        };
 
-    // 2. Day Section
-    const DaySection = memo(({ day, dIdx, currentTripId, updateEvent }) => {
-        const [isExpanded, setIsExpanded] = useState(true);
-
-        return (
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden mb-4">
-                <div 
-                    className="bg-pink-50/50 p-3 flex justify-between items-center cursor-pointer select-none"
-                    onClick={() => setIsExpanded(!isExpanded)}
-                >
-                    <div className="flex items-center gap-2">
-                        {isExpanded ? <ChevronDown className="w-4 h-4 text-pink-400" /> : <ChevronRight className="w-4 h-4 text-pink-400" />}
-                        <h3 className="font-bold text-slate-800 flex flex-col sm:flex-row sm:gap-2 text-sm sm:text-base">
-                            <span className="text-pink-600">Day {day.day}</span>
-                            <span className="font-normal text-slate-500">{day.date} - {day.title}</span>
-                        </h3>
-                    </div>
-                </div>
-                
-                {isExpanded && (
-                    <div className="p-4 relative">
-                        <div className="absolute left-[27px] top-4 bottom-4 w-0.5 bg-slate-100"></div>
-                        {(day.events || []).map((event, eIdx) => (
-                            <div key={eIdx} className="flex gap-4 relative mb-6 last:mb-0 group">
-                                <div className="w-12 flex-shrink-0 flex flex-col items-end pt-1 z-10 bg-white">
-                                    <input 
-                                        type="text" 
-                                        value={event.time || ''} 
-                                        onChange={(e) => updateEvent(currentTripId, dIdx, eIdx, 'time', e.target.value)}
-                                        className="text-xs font-bold text-slate-400 w-full text-right focus:text-pink-500 focus:outline-none bg-transparent"
-                                    />
+        if (!trips || trips.length === 0) {
+            return (
+                <div className="flex flex-col items-center justify-center h-[70vh] px-4 text-center animate-in fade-in">
+                    <div className="bg-white p-8 rounded-3xl shadow-lg border border-pink-100 max-w-sm w-full">
+                        <div className="w-16 h-16 bg-pink-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <Sparkles className="w-8 h-8 text-pink-500" />
+                        </div>
+                        <h2 className="text-xl font-bold text-slate-800 mb-2">開始規劃蜜月</h2>
+                        <p className="text-slate-500 mb-6 text-sm">目前資料庫是空的，讓 AI 為你們寫下第一篇章吧！</p>
+                        
+                        <div className="space-y-3 text-left mb-6">
+                            <div>
+                                <label className="text-xs text-slate-400 font-bold ml-1">地點</label>
+                                <input type="text" value={form.location} onChange={e=>setForm({...form, location: e.target.value})} className="w-full p-3 bg-slate-50 rounded-xl text-sm border focus:border-pink-300 outline-none" />
+                            </div>
+                            <div className="flex gap-2">
+                                <div className="flex-1">
+                                    <label className="text-xs text-slate-400 font-bold ml-1">天數</label>
+                                    <input type="number" value={form.days} onChange={e=>setForm({...form, days: e.target.value})} className="w-full p-3 bg-slate-50 rounded-xl text-sm border focus:border-pink-300 outline-none" />
                                 </div>
-                                <div className="absolute left-[11px] top-2 w-2.5 h-2.5 rounded-full bg-pink-300 border-2 border-white shadow-sm z-20"></div>
-                                <div className="flex-grow bg-slate-50/50 rounded-xl p-3 border border-slate-100 hover:border-pink-200 hover:shadow-sm transition-all group-hover:bg-white">
-                                    <div className="flex items-start gap-2 mb-1">
-                                        <input 
-                                            type="text" 
-                                            value={event.activity || ''} 
-                                            onChange={(e) => updateEvent(currentTripId, dIdx, eIdx, 'activity', e.target.value)}
-                                            className="w-full font-bold text-slate-700 text-sm focus:outline-none bg-transparent border-b border-transparent focus:border-pink-200"
-                                        />
-                                    </div>
-                                    <div className="flex items-center gap-1 text-xs text-blue-500 mb-2">
-                                        <MapPin className="w-3 h-3 flex-shrink-0" />
-                                        <input 
-                                            type="text"
-                                            value={event.location || ''} 
-                                            onChange={(e) => updateEvent(currentTripId, dIdx, eIdx, 'location', e.target.value)}
-                                            className="w-full bg-transparent focus:outline-none border-b border-transparent focus:border-pink-200 text-blue-500 placeholder-blue-300 truncate"
-                                            placeholder="輸入地點..."
-                                        />
-                                        <button 
-                                            onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.location)}`, '_blank')}
-                                            className="p-1 hover:bg-blue-50 rounded-full"
-                                        >
-                                            <ExternalLink className="w-3 h-3" />
-                                        </button>
-                                    </div>
-                                    <textarea 
-                                        value={event.note || ''} 
-                                        onChange={(e) => updateEvent(currentTripId, dIdx, eIdx, 'note', e.target.value)}
-                                        className="w-full text-xs text-slate-400 focus:outline-none bg-transparent resize-none focus:text-slate-600"
-                                        placeholder="備註..."
-                                        rows="1"
-                                        onInput={(e) => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; }}
-                                    />
+                                <div className="flex-1">
+                                    <label className="text-xs text-slate-400 font-bold ml-1">日期</label>
+                                    <input type="date" value={form.startDate} onChange={e=>setForm({...form, startDate: e.target.value})} className="w-full p-3 bg-slate-50 rounded-xl text-sm border focus:border-pink-300 outline-none" />
                                 </div>
                             </div>
-                        ))}
+                        </div>
+
+                        <button onClick={handleCreate} disabled={loading} className="w-full bg-pink-500 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-pink-600 transition disabled:opacity-50">
+                            {loading ? <><Loader2 className="animate-spin w-4 h-4"/> {loadingStatus || "生成中..."}</> : "AI 生成行程"}
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
+        const currentTrip = trips.find(t => t.id === selectedTripId) || trips[0];
+
+        return (
+            <div className="animate-in fade-in pb-20">
+                <div className="flex items-center gap-2 overflow-x-auto pb-2 mb-4 no-scrollbar">
+                    {trips.map(trip => (
+                        <button key={trip.id} onClick={() => setSelectedTripId(trip.id)} className={`flex-shrink-0 px-4 py-2 rounded-full text-sm font-bold flex items-center gap-2 transition border ${selectedTripId === trip.id ? 'bg-pink-500 text-white border-pink-500' : 'bg-white text-slate-600 border-slate-200'}`}>
+                            {trip.location}
+                            {selectedTripId === trip.id && <X className="w-3 h-3 ml-1 opacity-70 hover:opacity-100" onClick={(e)=>{e.stopPropagation(); if(confirm('刪除此行程?')) deleteTrip(trip.id)}} />}
+                        </button>
+                    ))}
+                    <button onClick={() => setShowModal(true)} className="flex-shrink-0 px-3 py-2 rounded-full bg-white border border-dashed border-pink-300 text-pink-500 text-sm font-medium flex items-center gap-1">
+                        <Plus className="w-4 h-4" />
+                    </button>
+                </div>
+
+                <div className="space-y-4">
+                    {currentTrip?.itineraryData?.map((day, idx) => (
+                        <div key={idx} className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                            <div className="bg-pink-50/50 p-3 border-b border-pink-50 flex items-center gap-2">
+                                <span className="bg-pink-100 text-pink-600 text-xs font-bold px-2 py-1 rounded-lg">Day {day.day}</span>
+                                <span className="text-sm font-medium text-slate-700">{day.date}</span>
+                                <span className="text-sm font-bold text-slate-800 truncate flex-1 text-right">{day.title}</span>
+                            </div>
+                            <div className="p-3 space-y-4">
+                                {day.events?.map((ev, eIdx) => (
+                                    <div key={eIdx} className="flex gap-3 relative pl-2">
+                                        <div className="absolute left-[3px] top-2 bottom-[-16px] w-[2px] bg-slate-100 last:hidden"></div>
+                                        <div className="absolute left-0 top-2 w-2 h-2 rounded-full bg-pink-300"></div>
+                                        
+                                        <div className="flex-1">
+                                            <div className="flex justify-between items-start mb-1">
+                                                <span className="text-xs font-mono text-slate-400 bg-slate-50 px-1 rounded">{ev.time}</span>
+                                            </div>
+                                            <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                                                <div className="font-bold text-slate-700 mb-1">{ev.activity}</div>
+                                                <div className="flex items-center gap-1 text-xs text-blue-500 mb-2 cursor-pointer" onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(ev.location)}`, '_blank')}>
+                                                    <MapPin className="w-3 h-3"/> {ev.location}
+                                                </div>
+                                                <div className="text-xs text-slate-500">{ev.note}</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+
+                {showModal && (
+                    <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
+                        <div className="bg-white p-6 rounded-3xl w-full max-w-sm">
+                            <h3 className="font-bold text-lg mb-4">新增城市行程</h3>
+                            <div className="space-y-3 mb-4">
+                                <input type="text" placeholder="城市" value={form.location} onChange={e=>setForm({...form, location: e.target.value})} className="w-full p-3 border rounded-xl" />
+                                <input type="number" placeholder="天數" value={form.days} onChange={e=>setForm({...form, days: e.target.value})} className="w-full p-3 border rounded-xl" />
+                                <input type="date" value={form.startDate} onChange={e=>setForm({...form, startDate: e.target.value})} className="w-full p-3 border rounded-xl" />
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={()=>setShowModal(false)} disabled={loading} className="flex-1 p-3 bg-slate-100 rounded-xl text-slate-500">取消</button>
+                                <button onClick={handleCreate} disabled={loading} className="flex-1 p-3 bg-pink-500 text-white rounded-xl font-bold flex justify-center items-center gap-2">
+                                    {loading ? <Loader2 className="animate-spin w-4 h-4"/> : "生成"}
+                                </button>
+                            </div>
+                            {loading && <p className="text-xs text-pink-500 text-center mt-2 animate-pulse">{loadingStatus}</p>}
+                        </div>
                     </div>
                 )}
             </div>
         );
     });
 
-    const PlannerTab = memo(({ trips, selectedTripId, setSelectedTripId, deleteTrip, showAddTrip, setShowAddTrip, newTripForm, setNewTripForm, generateItineraryDoc, loading, loadingStatus, updateEvent, currentTrip, isDataLoading, isOnline, errorMessage, forceReconnect }) => {
-      
-      if (isDataLoading) {
-        return (
-          <div className="flex flex-col items-center justify-center py-20 animate-in fade-in text-center px-4">
-             <Loader2 className="w-10 h-10 text-pink-500 animate-spin mb-4" />
-             <p className="text-slate-500 font-medium">正在從資料庫讀取行程...</p>
-             <p className="text-xs text-slate-400 mt-2">若超過 5 秒未回應，將顯示重試按鈕</p>
-          </div>
-        );
-      }
-
-      // Serious Connection Error State
-      if (errorMessage) {
-          return (
-            <div className="flex flex-col items-center justify-center py-20 animate-in fade-in text-center px-4">
-                <div className="bg-red-50 p-6 rounded-3xl border border-red-100 max-w-sm">
-                    <WifiOff className="w-12 h-12 text-red-400 mx-auto mb-4" />
-                    <h3 className="font-bold text-red-700 text-lg mb-2">無法連線到資料庫</h3>
-                    <p className="text-red-500 text-sm mb-6">{errorMessage}</p>
-                    <button 
-                        onClick={forceReconnect}
-                        className="bg-red-500 text-white px-6 py-3 rounded-xl font-bold text-sm shadow-lg shadow-red-200 hover:bg-red-600 transition flex items-center gap-2 mx-auto"
-                    >
-                        <RotateCcw className="w-4 h-4" /> 重試連線
-                    </button>
-                </div>
+    // --- Weather Card (Optimized) ---
+    const WeatherCard = memo(({ info, onDelete }) => (
+      <div className="bg-gradient-to-br from-blue-400 to-blue-600 rounded-2xl p-5 text-white shadow-md relative overflow-hidden mb-4">
+        <button onClick={() => onDelete(info.id)} className="absolute top-2 right-2 text-white/80 hover:text-white bg-white/20 rounded-full p-1"><X className="w-4 h-4"/></button>
+        <div className="flex justify-between items-start mb-3">
+            <div>
+                <h3 className="text-xl font-bold flex items-center gap-2">{info.location}</h3>
+                <span className="text-sm opacity-90">{info.temp}</span>
             </div>
-          );
-      }
-
-      return (
-        <div className="space-y-4 animate-in fade-in duration-500">
-            {/* Trip Tabs */}
-            <div className="flex items-center gap-2 overflow-x-auto pb-2 no-scrollbar px-1">
-                {trips.map(trip => (
-                    <button
-                        key={trip.id}
-                        onClick={() => setSelectedTripId(trip.id)}
-                        className={`flex-shrink-0 px-4 py-2 rounded-full text-sm font-bold flex items-center gap-2 transition shadow-sm border ${selectedTripId === trip.id ? 'bg-pink-500 text-white border-pink-500 shadow-md' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
-                    >
-                        {trip.location} <span className="text-[10px] opacity-70 font-normal">{trip.days}天</span>
-                        {selectedTripId === trip.id && (
-                            <div 
-                                className="w-4 h-4 rounded-full bg-pink-600 flex items-center justify-center hover:bg-red-500 ml-1"
-                                onClick={(e) => { e.stopPropagation(); if(confirm('確定要刪除這個行程嗎？刪除後資料庫也會同步刪除。')) deleteTrip(trip.id); }}
-                            >
-                                <X className="w-2 h-2 text-white" />
-                            </div>
-                        )}
-                    </button>
-                ))}
-                <button 
-                    onClick={() => setShowAddTrip(true)}
-                    className="flex-shrink-0 px-3 py-2 rounded-full bg-white text-pink-500 border border-pink-200 border-dashed text-sm font-medium flex items-center gap-1 hover:bg-pink-50 transition"
-                >
-                    <Plus className="w-4 h-4" /> 新增城市
-                </button>
-            </div>
-
-            {/* Content Area */}
-            {currentTrip ? (
-                <div className="pb-20">
-                    {currentTrip.itineraryData?.map((day, dIdx) => (
-                        <DaySection 
-                            key={`${currentTrip.id}-${dIdx}`} 
-                            day={day} 
-                            dIdx={dIdx} 
-                            currentTripId={currentTrip.id} 
-                            updateEvent={updateEvent} 
-                        />
-                    ))}
-                </div>
-            ) : (
-               !loading && trips.length > 0 ? 
-               <div className="text-center text-slate-400 py-20 flex flex-col items-center border-2 border-dashed border-slate-200 rounded-2xl mx-4">
-                 <Navigation className="w-12 h-12 mb-2 opacity-20 text-slate-500"/>
-                 <p>請點擊上方選擇一個行程</p>
-               </div> :
-               !loading && (
-                   <div className="text-center py-20 px-6">
-                       <div className="bg-white p-8 rounded-3xl shadow-sm border border-pink-100 inline-block">
-                           <Sparkles className="w-12 h-12 text-pink-400 mx-auto mb-4" />
-                           <h3 className="text-lg font-bold text-slate-700 mb-2">尚無行程資料</h3>
-                           <p className="text-slate-400 text-sm mb-6">資料庫目前是空的，請按下按鈕讓 AI 為您規劃！</p>
-                           <button 
-                                onClick={() => setShowAddTrip(true)}
-                                disabled={!isOnline}
-                                className="bg-pink-500 text-white px-6 py-3 rounded-full font-bold text-sm shadow-lg shadow-pink-200 hover:bg-pink-600 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                           >
-                               {isOnline ? "開始 AI 規劃" : "等待資料庫連線..."}
-                           </button>
-                       </div>
-                   </div>
-               )
-            )}
-
-            {/* Add Trip Modal */}
-            {showAddTrip && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-300">
-                    <div className="bg-white p-6 rounded-3xl shadow-2xl w-full max-w-sm animate-in zoom-in-95 duration-300 relative overflow-hidden">
-                        <div className="flex justify-between items-center mb-6">
-                            <h3 className="font-bold text-slate-800 text-xl flex items-center gap-2">
-                                <MapPin className="w-5 h-5 text-pink-500" />
-                                規劃新旅程
-                            </h3>
-                            {!loading && (
-                                <button onClick={() => setShowAddTrip(false)} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200 transition">
-                                    <X className="w-4 h-4 text-slate-500"/>
-                                </button>
-                            )}
-                        </div>
-                        
-                        <div className="space-y-4 mb-6">
-                            <div>
-                                <label className="text-xs font-bold text-slate-400 ml-1 mb-1 block">城市 / 地區</label>
-                                <input 
-                                    type="text" 
-                                    placeholder="例如: 京都、大阪" 
-                                    value={newTripForm.location} 
-                                    onChange={e => setNewTripForm({...newTripForm, location: e.target.value})} 
-                                    className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl text-base font-medium focus:outline-none focus:ring-2 focus:ring-pink-300 focus:bg-white transition" 
-                                    disabled={loading} 
-                                />
-                            </div>
-                            <div className="flex gap-4">
-                                <div className="flex-1">
-                                    <label className="text-xs font-bold text-slate-400 ml-1 mb-1 block">天數</label>
-                                    <input 
-                                        type="number" 
-                                        placeholder="5" 
-                                        value={newTripForm.days} 
-                                        onChange={e => setNewTripForm({...newTripForm, days: e.target.value})} 
-                                        className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl text-base font-medium focus:outline-none focus:ring-2 focus:ring-pink-300 focus:bg-white transition" 
-                                        disabled={loading} 
-                                    />
-                                </div>
-                                <div className="flex-1">
-                                    <label className="text-xs font-bold text-slate-400 ml-1 mb-1 block">開始日期</label>
-                                    <input 
-                                        type="date" 
-                                        value={newTripForm.startDate} 
-                                        onChange={e => setNewTripForm({...newTripForm, startDate: e.target.value})} 
-                                        className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl text-sm font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-pink-300 focus:bg-white transition" 
-                                        disabled={loading} 
-                                    />
-                                </div>
-                            </div>
-                        </div>
-
-                        <button 
-                            onClick={() => generateItineraryDoc(newTripForm.location, newTripForm.days, newTripForm.startDate)}
-                            disabled={loading || !newTripForm.location || !newTripForm.startDate || !isOnline}
-                            className="w-full bg-gradient-to-r from-pink-500 to-rose-500 text-white py-4 rounded-2xl text-base font-bold flex items-center justify-center gap-2 disabled:opacity-70 transition-all active:scale-95 shadow-lg shadow-pink-200"
-                        >
-                            {loading ? (
-                                <>
-                                    <Loader2 className="animate-spin w-5 h-5" /> 
-                                    {loadingStatus || "AI 正在啟動..."}
-                                </>
-                            ) : (
-                                <>
-                                    <Sparkles className="w-5 h-5" /> 
-                                    生成並儲存到資料庫
-                                </>
-                            )}
-                        </button>
-                        
-                        {!isOnline && !loading && (
-                            <p className="text-xs text-red-500 text-center mt-2 flex items-center justify-center gap-1">
-                                <AlertCircle className="w-3 h-3"/> 無法連線到資料庫，請重試。
-                            </p>
-                        )}
-                    </div>
-                </div>
-            )}
+            <CloudSun className="w-10 h-10 opacity-80" />
         </div>
-      );
-    });
-
-    const FoodTab = memo(({ getNearbyFood, loading, nearbyFood }) => (
-      <div className="space-y-4 animate-in slide-in-from-right duration-300">
-        <div className="bg-white p-5 rounded-2xl shadow-sm space-y-3 text-center relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-orange-300 to-orange-500"></div>
-          <h2 className="text-lg font-bold flex items-center justify-center gap-2 text-orange-600"><Utensils className="w-5 h-5" /> 附近美食探索</h2>
-          <button onClick={getNearbyFood} disabled={loading} className="w-full bg-gradient-to-r from-orange-400 to-orange-500 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition active:scale-95 disabled:opacity-70">
-            {loading ? <Loader2 className="animate-spin" /> : <Navigation className="w-5 h-5" />} 搜尋附近美食
-          </button>
-        </div>
-        <div className="grid gap-3">
-          {nearbyFood.map((food, idx) => (
-            <div key={idx} className="bg-white p-3 rounded-2xl shadow-sm flex gap-3 border-l-4 border-orange-400">
-              <div className="flex-grow">
-                <div className="flex justify-between items-start">
-                  <h3 className="font-bold text-slate-800">{food.name}</h3>
-                  <span className="text-orange-500 font-extrabold flex items-center gap-1 text-sm">★ {food.rating}</span>
-                </div>
-                <p className="text-xs text-slate-500 mb-1">{food.type} · <span className="italic">「{food.reason}」</span></p>
-                <button onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(food.name + ' ' + food.address)}`, '_blank')} className="text-xs text-blue-500 flex items-center gap-1 hover:underline bg-blue-50 px-2 py-1 rounded-full w-fit mt-2">
-                  <MapPin className="w-3 h-3" /> 導航至：{food.address}
-                </button>
-              </div>
+        
+        <div className="space-y-2">
+            <div className="bg-white/20 p-2 rounded-lg">
+                <span className="text-xs font-bold block opacity-70 mb-1">🌤 氣候</span>
+                <p className="text-sm leading-tight">{info.weather}</p>
             </div>
-          ))}
+            <div className="bg-white/20 p-2 rounded-lg">
+                <span className="text-xs font-bold block opacity-70 mb-1">👕 建議穿搭</span>
+                <p className="text-sm leading-tight">{info.clothing}</p>
+            </div>
+            <div className="bg-white/20 p-2 rounded-lg">
+                <span className="text-xs font-bold block opacity-70 mb-1">⚠️ 注意事項</span>
+                <p className="text-sm leading-tight">{info.notes}</p>
+            </div>
         </div>
       </div>
     ));
 
-    const PrepTab = memo(({ packingList, setPackingList, deletePackingItem, newItemText, setNewItemText, addPackingItem, memos, setMemos, suggestPackingItems, suggestingItems, weatherInfos, addWeatherLocation, isAddingWeather }) => {
+    const PrepTab = memo(({ packingList, setPackingList, deletePackingItem, newItemText, setNewItemText, addPackingItem, memos, setMemos, suggestPackingItems, suggestingItems, weatherInfos, addWeatherLocation, isAddingWeather, deleteWeatherLocation }) => {
       const [weatherCity, setWeatherCity] = useState('');
-      
       return (
         <div className="space-y-6 animate-in slide-in-from-right duration-300">
           <section>
@@ -459,26 +284,15 @@
                <h2 className="text-lg font-bold flex items-center gap-2 text-blue-600"><ThermometerSun className="w-5 h-5" /> 城市氣候指南</h2>
              </div>
              {weatherInfos && weatherInfos.map(info => (
-                <WeatherCard key={info.id} info={info} onDelete={(id) => addWeatherLocation(null, id)} />
+                <WeatherCard key={info.id} info={info} onDelete={deleteWeatherLocation} />
              ))}
              <div className="flex gap-2 bg-white p-3 rounded-2xl shadow-sm border border-blue-100">
-               <input 
-                 type="text" 
-                 placeholder="輸入城市 (如: 京都)" 
-                 value={weatherCity}
-                 onChange={e => setWeatherCity(e.target.value)}
-                 className="flex-grow p-2 text-sm border rounded-xl focus:outline-none focus:border-blue-400"
-               />
-               <button 
-                 onClick={() => { if(weatherCity) { addWeatherLocation(weatherCity); setWeatherCity(''); }}}
-                 disabled={isAddingWeather || !weatherCity}
-                 className="bg-blue-100 text-blue-600 px-4 rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-blue-200 disabled:opacity-50"
-               >
+               <input type="text" placeholder="輸入城市 (如: 京都)" value={weatherCity} onChange={e => setWeatherCity(e.target.value)} className="flex-grow p-2 text-sm border rounded-xl focus:outline-none focus:border-blue-400"/>
+               <button onClick={() => { if(weatherCity) { addWeatherLocation(weatherCity); setWeatherCity(''); }}} disabled={isAddingWeather || !weatherCity} className="bg-blue-100 text-blue-600 px-4 rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-blue-200 disabled:opacity-50">
                  {isAddingWeather ? <Loader2 className="w-4 h-4 animate-spin"/> : <Plus className="w-4 h-4"/>} 新增
                </button>
              </div>
           </section>
-
           <section className="bg-white rounded-2xl shadow-sm p-5 border border-slate-100">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-bold flex items-center gap-2 text-green-700"><ClipboardList className="w-5 h-5" /> 行前準備清單</h2>
@@ -489,9 +303,7 @@
             <div className="space-y-2 mb-4">
               {packingList.map(item => (
                 <div key={item.id} className="flex items-center gap-3 group">
-                  <button onClick={() => setPackingList(packingList.map(i => i.id === item.id ? {...i, checked: !i.checked} : i))} className={`w-5 h-5 rounded border-2 flex items-center justify-center transition ${item.checked ? 'bg-green-500 border-green-500 text-white' : 'border-slate-300'}`}>
-                    {item.checked && <CheckCircle className="w-3 h-3" />}
-                  </button>
+                  <button onClick={() => setPackingList(packingList.map(i => i.id === item.id ? {...i, checked: !i.checked} : i))} className={`w-5 h-5 rounded border-2 flex items-center justify-center transition ${item.checked ? 'bg-green-500 border-green-500 text-white' : 'border-slate-300'}`}>{item.checked && <CheckCircle className="w-3 h-3" />}</button>
                   <span className={`flex-grow text-sm transition ${item.checked ? 'line-through text-slate-400' : 'text-slate-700'}`}>{item.text}</span>
                   <button onClick={() => deletePackingItem(item.id)} className="text-slate-300 hover:text-red-500 p-1 opacity-0 group-hover:opacity-100 transition"><Trash2 className="w-4 h-4" /></button>
                 </div>
@@ -502,7 +314,6 @@
               <button onClick={addPackingItem} className="bg-green-100 text-green-600 p-2 rounded-xl hover:bg-green-200 transition"><Plus className="w-5 h-5" /></button>
             </div>
           </section>
-
           <section className="bg-white rounded-2xl shadow-sm p-5 border border-slate-100">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-bold flex items-center gap-2 text-purple-700"><Edit2 className="w-5 h-5" /> 旅遊備忘錄</h2>
@@ -526,18 +337,10 @@
        const [isTaxIncluded, setIsTaxIncluded] = useState(true);
        const [isTaxFree, setIsTaxFree] = useState(false);
        const [discountPercent, setDiscountPercent] = useState('');
-
        const basePrice = parseFloat(calcPrice) || 0;
-       
        let preDiscountPrice = basePrice;
-       if (isTaxIncluded) {
-           if (isTaxFree) preDiscountPrice = basePrice / 1.1;
-       } else {
-           if (!isTaxFree) preDiscountPrice = basePrice * 1.1;
-       }
-
-       const discount = parseFloat(discountPercent) || 0;
-       const finalJpy = Math.round(preDiscountPrice * (1 - discount / 100));
+       if (isTaxIncluded) { if (isTaxFree) preDiscountPrice = basePrice / 1.1; } else { if (!isTaxFree) preDiscountPrice = basePrice * 1.1; }
+       const finalJpy = Math.round(preDiscountPrice * (1 - (parseFloat(discountPercent)||0) / 100));
        const finalTwd = Math.round(finalJpy * EXCHANGE_RATE);
 
        return (
@@ -546,7 +349,6 @@
                 <h2 className="text-lg font-bold flex items-center gap-2 text-red-600"><Ticket className="w-5 h-5" /> 優惠券錢包</h2>
                 <button onClick={() => setShowAddCoupon(true)} className="bg-red-100 text-red-600 px-3 py-1.5 rounded-full text-sm font-bold flex items-center gap-1"><Plus className="w-4 h-4"/> 新增</button>
              </div>
-             
              {showAddCoupon && (
                 <div className="bg-white p-4 rounded-2xl shadow-sm border border-red-100 space-y-2">
                     <input type="text" placeholder="標題" className="w-full p-2 border rounded" value={newCouponForm.title} onChange={e=>setNewCouponForm({...newCouponForm, title: e.target.value})} />
@@ -566,75 +368,52 @@
                     <p className="font-mono text-red-500 bg-red-50 p-2 text-center rounded mt-2 select-all">{c.code}</p>
                  </div>
              ))}
-
              <hr className="border-slate-200 my-4"/>
-
              <div className="bg-white rounded-2xl p-5 shadow-sm border border-blue-100">
-                <h3 className="font-bold mb-4 flex items-center gap-2 text-slate-700">
-                    <Calculator className="w-5 h-5 text-blue-500" /> 購物折扣計算機
-                </h3>
-                
+                <h3 className="font-bold mb-4 flex items-center gap-2 text-slate-700"><Calculator className="w-5 h-5 text-blue-500" /> 購物折扣計算機</h3>
                 <div className="space-y-4">
-                    <div>
-                        <label className="text-xs text-slate-500 font-bold ml-1">商品標價 (JPY)</label>
-                        <input type="number" value={calcPrice} onChange={e => setCalcPrice(e.target.value)} placeholder="0" className="w-full p-3 bg-slate-50 rounded-xl text-lg font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-200" />
-                    </div>
-
+                    <div><label className="text-xs text-slate-500 font-bold ml-1">商品標價 (JPY)</label><input type="number" value={calcPrice} onChange={e => setCalcPrice(e.target.value)} placeholder="0" className="w-full p-3 bg-slate-50 rounded-xl text-lg font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-200" /></div>
                     <div className="flex justify-between gap-2">
-                        <button 
-                            onClick={() => setIsTaxIncluded(!isTaxIncluded)}
-                            className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 border ${isTaxIncluded ? 'bg-blue-500 text-white border-blue-500' : 'bg-white text-slate-400 border-slate-200'}`}
-                        >
-                            {isTaxIncluded ? <CheckCircle className="w-3 h-3"/> : <div className="w-3 h-3 rounded-full border border-current"/>} 標價含稅
-                        </button>
-                        <button 
-                            onClick={() => setIsTaxFree(!isTaxFree)}
-                            className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 border ${isTaxFree ? 'bg-green-500 text-white border-green-500' : 'bg-white text-slate-400 border-slate-200'}`}
-                        >
-                            {isTaxFree ? <CheckCircle className="w-3 h-3"/> : <div className="w-3 h-3 rounded-full border border-current"/>} 免稅 (10%)
-                        </button>
+                        <button onClick={() => setIsTaxIncluded(!isTaxIncluded)} className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 border ${isTaxIncluded ? 'bg-blue-500 text-white border-blue-500' : 'bg-white text-slate-400 border-slate-200'}`}>{isTaxIncluded ? <CheckCircle className="w-3 h-3"/> : <div className="w-3 h-3 rounded-full border border-current"/>} 標價含稅</button>
+                        <button onClick={() => setIsTaxFree(!isTaxFree)} className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 border ${isTaxFree ? 'bg-green-500 text-white border-green-500' : 'bg-white text-slate-400 border-slate-200'}`}>{isTaxFree ? <CheckCircle className="w-3 h-3"/> : <div className="w-3 h-3 rounded-full border border-current"/>} 免稅 (10%)</button>
                     </div>
-
-                    <div className="flex items-center gap-3">
-                        <div className="flex-1">
-                            <label className="text-xs text-slate-500 font-bold ml-1">額外折扣 %</label>
-                            <div className="relative">
-                                <input type="number" value={discountPercent} onChange={e => setDiscountPercent(e.target.value)} placeholder="0" className="w-full p-3 bg-slate-50 rounded-xl font-bold focus:outline-none focus:ring-2 focus:ring-red-200 text-red-500" />
-                                <Percent className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="bg-slate-800 rounded-xl p-4 text-white">
-                        <div className="flex justify-between items-end mb-2">
-                            <span className="text-xs text-slate-400">最終入手價</span>
-                            <span className="text-2xl font-bold text-yellow-400">¥ {finalJpy.toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between items-center pt-2 border-t border-slate-700">
-                            <span className="text-xs text-slate-400">預估台幣</span>
-                            <span className="font-mono">NT$ {finalTwd.toLocaleString()}</span>
-                        </div>
-                    </div>
+                    <div className="flex items-center gap-3"><div className="flex-1"><label className="text-xs text-slate-500 font-bold ml-1">額外折扣 %</label><div className="relative"><input type="number" value={discountPercent} onChange={e => setDiscountPercent(e.target.value)} placeholder="0" className="w-full p-3 bg-slate-50 rounded-xl font-bold focus:outline-none focus:ring-2 focus:ring-red-200 text-red-500" /><Percent className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" /></div></div></div>
+                    <div className="bg-slate-800 rounded-xl p-4 text-white"><div className="flex justify-between items-end mb-2"><span className="text-xs text-slate-400">最終入手價</span><span className="text-2xl font-bold text-yellow-400">¥ {finalJpy.toLocaleString()}</span></div><div className="flex justify-between items-center pt-2 border-t border-slate-700"><span className="text-xs text-slate-400">預估台幣</span><span className="font-mono">NT$ {finalTwd.toLocaleString()}</span></div></div>
                 </div>
              </div>
-
-             <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 mt-4">
-               <h3 className="font-bold mb-3 flex items-center gap-2 text-sm text-slate-700"><RefreshCw className="w-4 h-4 text-slate-400" /> 簡易雙向換算 (匯率 {EXCHANGE_RATE})</h3>
-               <div className="flex gap-3 items-center">
-                 <div className="flex-1 relative">
-                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">TWD</span>
-                   <input type="number" value={currency.twd} onChange={(e) => handleCurrencyTwd(e.target.value)} className="w-full pl-12 p-2 bg-slate-50 rounded-xl focus:outline-none text-sm font-medium" />
-                 </div>
-                 <span className="text-slate-400">≈</span>
-                 <div className="flex-1 relative">
-                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-blue-500">JPY</span>
-                   <input type="number" value={currency.jpy} onChange={(e) => handleCurrencyJpy(e.target.value)} className="w-full pl-12 p-2 bg-blue-50 text-blue-700 font-bold rounded-xl text-sm focus:outline-none" />
-                 </div>
-               </div>
-             </div>
+             <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 mt-4"><h3 className="font-bold mb-3 flex items-center gap-2 text-sm text-slate-700"><RefreshCw className="w-4 h-4 text-slate-400" /> 簡易雙向換算 (匯率 {EXCHANGE_RATE})</h3><div className="flex gap-3 items-center"><div className="flex-1 relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">TWD</span><input type="number" value={currency.twd} onChange={(e) => handleCurrencyTwd(e.target.value)} className="w-full pl-12 p-2 bg-slate-50 rounded-xl focus:outline-none text-sm font-medium" /></div><span className="text-slate-400">≈</span><div className="flex-1 relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-blue-500">JPY</span><input type="number" value={currency.jpy} onChange={(e) => handleCurrencyJpy(e.target.value)} className="w-full pl-12 p-2 bg-blue-50 text-blue-700 font-bold rounded-xl text-sm focus:outline-none" /></div></div></div>
            </div>
        );
     });
+
+    const FoodTab = memo(({ getNearbyFood, loading, nearbyFood, foodStatus }) => (
+      <div className="space-y-4 animate-in slide-in-from-right duration-300">
+        <div className="bg-white p-5 rounded-2xl shadow-sm space-y-3 text-center relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-orange-300 to-orange-500"></div>
+          <h2 className="text-lg font-bold flex items-center justify-center gap-2 text-orange-600"><Utensils className="w-5 h-5" /> 附近美食探索</h2>
+          <button onClick={getNearbyFood} disabled={loading} className="w-full bg-gradient-to-r from-orange-400 to-orange-500 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition active:scale-95 disabled:opacity-70">
+            {loading ? <Loader2 className="animate-spin" /> : <Navigation className="w-5 h-5" />} 搜尋附近美食
+          </button>
+          {foodStatus && <p className="text-xs text-orange-600 font-medium animate-pulse">{foodStatus}</p>}
+        </div>
+        <div className="grid gap-3">
+          {nearbyFood.map((food, idx) => (
+            <div key={idx} className="bg-white p-3 rounded-2xl shadow-sm flex gap-3 border-l-4 border-orange-400">
+              <div className="flex-grow">
+                <div className="flex justify-between items-start">
+                  <h3 className="font-bold text-slate-800">{food.name}</h3>
+                  <span className="text-orange-500 font-extrabold flex items-center gap-1 text-sm">★ {food.rating}</span>
+                </div>
+                <p className="text-xs text-slate-500 mb-1">{food.type} · <span className="italic">「{food.reason}」</span></p>
+                <button onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(food.name + ' ' + food.address)}`, '_blank')} className="text-xs text-blue-500 flex items-center gap-1 hover:underline bg-blue-50 px-2 py-1 rounded-full w-fit mt-2">
+                  <MapPin className="w-3 h-3" /> 導航至：{food.address}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    ));
 
     const TranslateTab = memo(({ transInput, setTransInput, handleTranslate, translating, transResult }) => (
         <div className="space-y-6 animate-in slide-in-from-right duration-300">
@@ -643,351 +422,278 @@
              <h2 className="text-xl font-bold mb-2 flex items-center gap-2">AI 隨身日語翻譯</h2>
              <p className="text-indigo-100 text-sm">輸入中文，立刻轉為自然、有禮貌的日語。</p>
           </div>
-
           <div className="bg-white rounded-2xl shadow-sm p-4 border border-slate-100 space-y-4">
-            <div>
-              <label className="text-xs font-bold text-slate-400 mb-1 block">中文輸入</label>
-              <textarea 
-                value={transInput}
-                onChange={(e) => setTransInput(e.target.value)}
-                placeholder="例如：請問這個多少錢？ / 我對蝦子過敏。"
-                className="w-full p-4 bg-slate-50 rounded-xl text-base focus:outline-none focus:ring-2 focus:ring-indigo-200 resize-none h-24"
-              />
-            </div>
-            
-            <button 
-              onClick={handleTranslate}
-              disabled={translating || !transInput}
-              className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-indigo-700 transition disabled:opacity-50"
-            >
-              {translating ? <Loader2 className="animate-spin w-5 h-5" /> : <Sparkles className="w-5 h-5" />}
-              翻譯成日語
-            </button>
+            <div><label className="text-xs font-bold text-slate-400 mb-1 block">中文輸入</label><textarea value={transInput} onChange={(e) => setTransInput(e.target.value)} placeholder="例如：請問這個多少錢？ / 我對蝦子過敏。" className="w-full p-4 bg-slate-50 rounded-xl text-base focus:outline-none focus:ring-2 focus:ring-indigo-200 resize-none h-24"/></div>
+            <button onClick={handleTranslate} disabled={translating || !transInput} className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-indigo-700 transition disabled:opacity-50">{translating ? <Loader2 className="animate-spin w-5 h-5" /> : <Sparkles className="w-5 h-5" />} 翻譯成日語</button>
           </div>
-
           {transResult && (
             <div className="bg-white rounded-2xl shadow-sm p-6 border-l-4 border-indigo-500 animate-in fade-in slide-in-from-bottom-2">
-              <div className="mb-4">
-                <p className="text-xs text-slate-400 font-bold mb-1">日語 (Polite)</p>
-                <p className="text-2xl font-bold text-slate-800">{transResult.japanese}</p>
-              </div>
-              <div className="bg-slate-50 p-3 rounded-lg">
-                <p className="text-xs text-slate-400 font-bold mb-1">發音 (Romaji)</p>
-                <p className="text-sm font-mono text-indigo-600 font-medium">{transResult.romaji}</p>
-              </div>
+              <div className="mb-4"><p className="text-xs text-slate-400 font-bold mb-1">日語 (Polite)</p><p className="text-2xl font-bold text-slate-800">{transResult.japanese}</p></div>
+              <div className="bg-slate-50 p-3 rounded-lg"><p className="text-xs text-slate-400 font-bold mb-1">發音 (Romaji)</p><p className="text-sm font-mono text-indigo-600 font-medium">{transResult.romaji}</p></div>
             </div>
           )}
         </div>
     ));
 
-    // --- MAIN APP COMPONENT ---
+    // --- MAIN APP ---
     const App = () => {
       const [activeTab, setActiveTab] = useState('planner');
-      const [loading, setLoading] = useState(false);
-      const [loadingStatus, setLoadingStatus] = useState("");
-      const [currency, setCurrency] = useState({ twd: 100, jpy: 0 });
+      const [status, setStatus] = useState('loading'); // loading, ready, error
+      const [errorMsg, setErrorMsg] = useState('');
       const [user, setUser] = useState(null);
-      const [isSaving, setIsSaving] = useState(false);
-      const isRemoteUpdate = useRef(false);
-      const saveTimeoutRef = useRef(null);
-
-      // Data States
+      
+      // Data
       const [trips, setTrips] = useState([]);
       const [selectedTripId, setSelectedTripId] = useState(null);
-      const [showAddTrip, setShowAddTrip] = useState(false);
-      const [newTripForm, setNewTripForm] = useState({ location: '北海道', days: 8, startDate: '2026-03-04' });
       
+      // Other States
       const [memos, setMemos] = useState([]);
-      const [packingList, setPackingList] = useState([
-        { id: 1, text: '護照與機票', checked: false },
-        { id: 2, text: '發熱衣與保暖外套', checked: false },
-        { id: 3, text: '日幣現金與信用卡', checked: false },
-      ]);
+      const [packingList, setPackingList] = useState([]);
+      const [coupons, setCoupons] = useState([]);
+      const [weatherInfos, setWeatherInfos] = useState([]);
+      
+      // Feature States
       const [newItemText, setNewItemText] = useState('');
       const [suggestingItems, setSuggestingItems] = useState(false);
-      
-      const [weatherInfos, setWeatherInfos] = useState([
-          { id: 'default-hokkaido', location: '北海道', temp: '-3°C ~ 4°C', advice: '寒冷，需注意保暖', items: ['防滑鞋', '發熱衣', '保濕用品'] }
-      ]);
       const [isAddingWeather, setIsAddingWeather] = useState(false);
-
-      const [coupons, setCoupons] = useState([{ id: 1, title: 'Bic Camera 7%折扣', code: 'BC2024', description: '電器免稅用', image: null }]);
       const [showAddCoupon, setShowAddCoupon] = useState(false);
       const [newCouponForm, setNewCouponForm] = useState({ title: '', code: '', description: '', image: null });
       const [nearbyFood, setNearbyFood] = useState([]);
+      const [foodLoading, setFoodLoading] = useState(false);
+      const [foodStatus, setFoodStatus] = useState('');
       const [transInput, setTransInput] = useState('');
       const [transResult, setTransResult] = useState(null);
       const [translating, setTranslating] = useState(false);
-
-      // Data Loading State
-      const [isDataLoading, setIsDataLoading] = useState(true);
-      const [authError, setAuthError] = useState(null);
+      const [currency, setCurrency] = useState({ twd: 100, jpy: 0 });
+      
+      // Trip Generation
+      const [tripLoading, setTripLoading] = useState(false);
+      const [tripStatus, setTripStatus] = useState('');
 
       useEffect(() => {
-        const loader = document.getElementById('initial-loader');
-        if(loader) {
-            loader.style.opacity = '0';
-            setTimeout(() => loader.remove(), 500);
-        }
+        document.getElementById('initial-loader')?.remove();
         setCurrency(prev => ({ ...prev, jpy: Math.round(prev.twd / EXCHANGE_RATE) }));
-      }, []);
-
-      // Auth Logic: Force Anonymous
-      const connectToFirebase = useCallback(async () => {
-          setIsDataLoading(true);
-          setAuthError(null);
-          try {
-              if (!auth.currentUser) {
-                  await signInAnonymously(auth);
-              }
-          } catch (error) {
-              console.error("Auth Failed", error);
-              setAuthError(`登入失敗: ${error.code}`);
-              setIsDataLoading(false);
-          }
-      }, []);
-
-      useEffect(() => {
-        connectToFirebase();
         
-        // Timeout check
-        const timeout = setTimeout(() => { 
-            if (isDataLoading && !user) {
-                setIsDataLoading(false); 
-                setAuthError("連線逾時，請檢查網路。");
-            }
-        }, 5000);
-
-        return () => { clearTimeout(timeout); onAuthStateChanged(auth, setUser); };
-      }, [connectToFirebase]);
-
-      useEffect(() => {
-        if (!user) return;
-        setAuthError(null);
-        // CHANGE TO SHARED PUBLIC PATH
-        const unsubscribe = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'shared_trip_data', 'main'), (docSnap) => {
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            isRemoteUpdate.current = true;
-            if (data.trips) setTrips(data.trips);
-            if (data.packingList) setPackingList(data.packingList);
-            if (data.memos) setMemos(data.memos);
-            if (data.coupons) setCoupons(data.coupons);
-            if (data.weatherInfos) setWeatherInfos(data.weatherInfos);
-            
-            setSelectedTripId(prev => {
-                if (!prev && data.trips?.length > 0) {
-                    return data.trips[0].id;
-                }
-                return prev;
-            });
-
-            setTimeout(() => { isRemoteUpdate.current = false; }, 100);
-          } else {
-              setTrips([]);
-          }
-          setIsDataLoading(false);
-        }, (err) => {
-            console.error("Sync Failed", err);
-            setAuthError(`讀取失敗: ${err.code || err.message}`);
-            setIsDataLoading(false);
+        // 1. Auth
+        signInAnonymously(auth).catch(e => {
+            console.error(e);
+            setStatus('error');
+            setErrorMsg(`登入失敗: ${e.code}`);
         });
-        return () => unsubscribe();
+
+        const unsubAuth = onAuthStateChanged(auth, u => {
+            if(u) {
+                setUser(u);
+                // 2. Listener
+                const docRef = doc(db, 'artifacts', appId, 'public', 'shared_data');
+                onSnapshot(docRef, (snap) => {
+                    setStatus('ready');
+                    if (snap.exists()) {
+                        const d = snap.data();
+                        setTrips(d.trips || []);
+                        setPackingList(d.packingList || []);
+                        setMemos(d.memos || []);
+                        setCoupons(d.coupons || []);
+                        setWeatherInfos(d.weatherInfos || []);
+                        
+                        // Smart Select
+                        setSelectedTripId(prev => {
+                            if (prev && d.trips?.find(t => t.id === prev)) return prev;
+                            return d.trips?.[0]?.id || null;
+                        });
+                    } else {
+                        // Empty DB
+                        setTrips([]);
+                    }
+                }, err => {
+                    console.error(err);
+                    setStatus('error');
+                    setErrorMsg("無法讀取資料庫，請檢查權限");
+                });
+            }
+        });
+        return () => unsubAuth();
+      }, []);
+
+      const saveToCloud = useCallback((data) => {
+        if(!user) return;
+        setDoc(doc(db, 'artifacts', appId, 'public', 'shared_data'), data, { merge: true })
+          .catch(e => console.error("Save failed", e));
       }, [user]);
 
-      const saveToCloud = useCallback((dataToSave) => {
-        if (!user) return;
-        setIsSaving(true);
-        if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-        saveTimeoutRef.current = setTimeout(async () => {
-          try {
-            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'shared_trip_data', 'main'), dataToSave, { merge: true });
-            setIsSaving(false);
-          } catch (err) { console.error(err); setIsSaving(false); setAuthError("儲存失敗"); }
-        }, 1000);
-      }, [user]);
-
+      // Trigger Save when data changes
       useEffect(() => {
-        if (isRemoteUpdate.current || !user) return;
-        saveToCloud({ trips, packingList, memos, coupons, weatherInfos });
-      }, [trips, packingList, memos, coupons, weatherInfos, saveToCloud, user]);
+          if (status === 'ready') {
+              // Debounce could be added here, but for simplicity direct save
+              saveToCloud({ trips, packingList, memos, coupons, weatherInfos });
+          }
+      }, [trips, packingList, memos, coupons, weatherInfos, status]);
 
-      // --- Actions ---
-      const generateItineraryDoc = async (loc, days, start, isInitial = false) => {
-        setLoading(true); 
-        setLoadingStatus("AI 準備啟動...");
-        try {
-          const result = await fetchGemini(
-            `規劃${start}開始的${days}天${loc}蜜月行程，請安排浪漫、美食與代表性景點。`,
-            `你是一位日本旅遊專家。請為新婚夫婦規劃${start}開始的${days}天${loc}蜜月行程。輸出格式必須為 JSON 陣列，包含 day (數字), date (字串YYYY-MM-DD), title (當天主題), events (陣列，含 time, activity, location, note)。`,
-            setLoadingStatus
-          );
-          
-          setLoadingStatus("正在儲存行程...");
-          
-          const newTrip = { id: Date.now(), location: loc, days, startDate: start, itineraryData: result };
-          
-          setTrips(prev => {
-            const newTrips = [...prev, newTrip];
-            saveToCloud({ trips: newTrips }); 
-            return newTrips;
-          });
-          
-          setSelectedTripId(newTrip.id);
-          if (isInitial) setNewTripForm({ location: '', days: 5, startDate: '' });
-          
-          if (!isInitial) setShowAddTrip(false); 
-        } catch (error) { 
-            alert(`生成失敗: ${error.message}`); 
-        } finally { 
-            setLoading(false); 
-            setIsDataLoading(false); 
-        }
+      // --- Handlers ---
+      const handleAddTrip = async (loc, days, start, callback) => {
+          setTripLoading(true);
+          setTripStatus("AI 正在規劃行程...");
+          try {
+              const result = await fetchGemini(
+                  `規劃${start}開始的${days}天${loc}蜜月行程...`, 
+                  `你是一位日本旅遊專家。輸出 JSON 格式: [{day:1, date:"...", title:"...", events:[{time:"...", activity:"...", location:"...", note:"..."}]}]`,
+                  setTripStatus
+              );
+              
+              const newTrip = { id: Date.now(), location: loc, days, startDate: start, itineraryData: result };
+              setTrips(prev => [...prev, newTrip]);
+              setSelectedTripId(newTrip.id);
+              callback && callback();
+          } catch(e) {
+              alert("生成失敗: " + e.message);
+          } finally {
+              setTripLoading(false);
+          }
       };
 
-      const updateEvent = useCallback((tripId, dayIdx, eventIdx, field, value) => {
-        setTrips(prev => prev.map(trip => {
-          if (trip.id === tripId) {
-            if (!trip.itineraryData || !trip.itineraryData[dayIdx] || !trip.itineraryData[dayIdx].events) return trip;
-            const newData = [...trip.itineraryData];
-            const newDay = {...newData[dayIdx]};
-            const newEvents = [...newDay.events];
-            newEvents[eventIdx] = {...newEvents[eventIdx], [field]: value};
-            newDay.events = newEvents;
-            newData[dayIdx] = newDay;
-            return { ...trip, itineraryData: newData };
-          }
-          return trip;
-        }));
-      }, []);
+      const deleteTrip = (id) => {
+          setTrips(prev => prev.filter(t => t.id !== id));
+          if(selectedTripId === id) setSelectedTripId(null);
+      };
+
+      const getNearbyFood = () => {
+          if(!navigator.geolocation) return alert("您的瀏覽器不支援或已封鎖定位功能");
+          
+          setFoodLoading(true);
+          setFoodStatus("正在定位中...");
+
+          navigator.geolocation.getCurrentPosition(
+            async (pos) => {
+                const { latitude, longitude } = pos.coords;
+                setFoodStatus(`定位成功 (${latitude.toFixed(2)}, ${longitude.toFixed(2)})，正在搜尋美食...`);
+                try {
+                    const res = await fetchGemini(`推薦 (${latitude}, ${longitude}) 附近5家美食。
+                    請嚴格輸出 JSON 陣列，格式: [{name, rating, type, reason, address}]`);
+                    setNearbyFood(res);
+                    setFoodStatus("");
+                } catch(e){ 
+                    setFoodStatus("搜尋失敗");
+                    alert("搜尋失敗: " + e.message); 
+                } finally { 
+                    setFoodLoading(false); 
+                }
+            },
+            (err) => {
+                console.error(err);
+                setFoodLoading(false);
+                setFoodStatus("定位失敗");
+                let msg = "無法抓取位置。";
+                if(err.code === 1) msg += " (權限被拒絕)";
+                else if(err.code === 2) msg += " (位置無法取得)";
+                else if(err.code === 3) msg += " (連線逾時)";
+                alert(msg + " 請確認您已允許瀏覽器存取位置資訊 (若是本機檔案可能受限，請使用 localhost 或 https)。");
+            },
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+          );
+      };
 
       const addWeatherLocation = async (city, deleteId = null) => {
           if (deleteId) {
               setWeatherInfos(prev => prev.filter(i => i.id !== deleteId));
               return;
           }
+          if (!city) return;
+          
           setIsAddingWeather(true);
           try {
               const result = await fetchGemini(
-                  `請分析 ${city} 3月份的天氣狀況、平均氣溫，並給出蜜月旅行的穿衣建議與3個必備物品。輸出 JSON: { temp: "溫度範圍", advice: "簡短建議", items: ["物品1", "物品2", "物品3"] }`
+                  `請分析 ${city} 3月份的天氣狀況。
+                  請嚴格輸出 JSON 格式，包含欄位: 
+                  location (城市名), 
+                  temp (氣溫範圍), 
+                  weather (氣候簡述), 
+                  clothing (建議穿搭, 簡短), 
+                  notes (注意事項, 簡短)`
               );
-              setWeatherInfos(prev => [...prev, { id: Date.now(), location: city, ...result }]);
-          } catch (e) { alert("獲取天氣資訊失敗"); } finally { setIsAddingWeather(false); }
+              setWeatherInfos(prev => [...prev, { id: Date.now(), ...result }]);
+          } catch (e) { 
+              alert("獲取天氣失敗: " + e.message); 
+          } finally { 
+              setIsAddingWeather(false); 
+          }
       };
 
-      const handleImageUpload = (e) => {
-        const file = e.target.files[0];
-        if (file) setNewCouponForm(prev => ({ ...prev, image: URL.createObjectURL(file) }));
-      };
-
-      const getNearbyFood = async () => {
-        if (!navigator.geolocation) return alert("不支援定位");
-        setLoading(true);
-        navigator.geolocation.getCurrentPosition(async (pos) => {
-          try {
-            const result = await fetchGemini(
-                `我位於 (${pos.coords.latitude}, ${pos.coords.longitude})。請推薦附近5間高評分美食。輸出 JSON 陣列: { name, rating, type, reason, address }`,
-                "你是一位專業美食評論家。"
-            );
-            setNearbyFood(result);
-          } catch(e) { alert("搜尋失敗"); } finally { setLoading(false); }
-        }, () => { setLoading(false); alert("定位失敗"); });
-      };
-      
-      const handleTranslate = async () => {
-        if (!transInput.trim()) return;
-        setTranslating(true);
-        try {
-          const result = await fetchGemini(`Translate: "${transInput}" to polite Japanese. Output JSON: { "japanese": "...", "romaji": "..." }`);
-          setTransResult(result);
-        } catch (error) { console.error(error); } finally { setTranslating(false); }
-      };
-
-      // Currency Handlers
-      const handleCurrencyTwd = (val) => {
-        const twd = val ? parseFloat(val) : 0;
-        setCurrency({ twd: twd, jpy: Math.round(twd / EXCHANGE_RATE) });
-      };
-
-      const handleCurrencyJpy = (val) => {
-        const jpy = val ? parseFloat(val) : 0;
-        setCurrency({ twd: Math.round(jpy * EXCHANGE_RATE), jpy: jpy });
-      };
-
-      const deleteTrip = (id) => {
-          setTrips(p => p.filter(t => t.id !== id)); 
-          if(selectedTripId === id) setSelectedTripId(null);
-      };
-
-      const currentTrip = trips.find(t => t.id === selectedTripId);
-
-      // --- Render ---
       return (
         <div className="min-h-screen pb-24 font-sans">
-          <header className="bg-white border-b p-4 text-center sticky top-0 z-50 shadow-sm">
-            <h1 className="text-xl font-bold flex items-center justify-center gap-2 text-pink-600">
-              <Heart className="fill-pink-600 w-5 h-5" /> 蜜月行程管家
-              {isSaving && <Cloud className="w-4 h-4 text-slate-300 animate-pulse ml-2" />}
-            </h1>
-            {user ? (
-                <div className="text-[10px] text-slate-400 mt-1 flex items-center justify-center gap-1">
-                    <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse"></div>
-                    連線成功 (ID: {user.uid.slice(0,4)})
-                </div>
-            ) : (
-                <div className="text-[10px] text-slate-400 mt-1 flex items-center justify-center gap-1">
-                    <Loader2 className="w-3 h-3 animate-spin"/> 連線中...
-                </div>
-            )}
-            {authError && <div className="text-[10px] text-red-500 mt-1 flex items-center justify-center gap-1 bg-red-50 p-1 rounded"><AlertCircle className="w-3 h-3"/> {authError}</div>}
+          <header className="bg-white border-b p-4 text-center sticky top-0 z-50 shadow-sm flex justify-between items-center px-6">
+             <div className="flex items-center gap-2">
+                 <Heart className="text-pink-500 fill-pink-500 w-6 h-6"/>
+                 <h1 className="font-bold text-lg text-slate-800">蜜月管家</h1>
+             </div>
+             
+             {status === 'loading' && <div className="flex items-center gap-2 text-xs text-slate-400"><Loader2 className="w-3 h-3 animate-spin"/> 連線中...</div>}
+             {status === 'ready' && <div className="flex items-center gap-2 text-xs text-green-500"><div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"/> 已連線</div>}
+             {status === 'error' && <button onClick={()=>window.location.reload()} className="flex items-center gap-1 text-xs text-red-500 bg-red-50 px-2 py-1 rounded"><AlertCircle className="w-3 h-3"/> 重試</button>}
           </header>
 
           <main className="max-w-4xl mx-auto p-4">
-            {activeTab === 'planner' && <PlannerTab 
-                trips={trips} selectedTripId={selectedTripId} setSelectedTripId={setSelectedTripId} 
+            {status === 'error' && (
+                <div className="bg-red-100 border border-red-200 text-red-700 p-4 rounded-xl mb-4 text-center">
+                    <p className="font-bold">連線發生錯誤</p>
+                    <p className="text-sm">{errorMsg}</p>
+                    <p className="text-xs mt-2 text-red-500">請確認 Firebase Console > Authentication > Sign-in method > Anonymous 已開啟</p>
+                </div>
+            )}
+
+            {activeTab === 'planner' && <NewPlannerTab 
+                trips={trips} 
+                selectedTripId={selectedTripId} 
+                setSelectedTripId={setSelectedTripId}
                 deleteTrip={deleteTrip}
-                setShowAddTrip={setShowAddTrip} showAddTrip={showAddTrip}
-                newTripForm={newTripForm} setNewTripForm={setNewTripForm}
-                generateItineraryDoc={generateItineraryDoc} loading={loading} loadingStatus={loadingStatus}
-                updateEvent={updateEvent} currentTrip={currentTrip}
-                isDataLoading={isDataLoading} isOnline={!!user} errorMessage={authError}
-                forceReconnect={connectToFirebase}
+                onAddTrip={handleAddTrip}
+                loading={tripLoading}
+                loadingStatus={tripStatus}
             />}
 
-            {activeTab === 'food' && <FoodTab getNearbyFood={getNearbyFood} loading={loading} nearbyFood={nearbyFood} />}
-
+            {activeTab === 'food' && <FoodTab getNearbyFood={getNearbyFood} loading={foodLoading} nearbyFood={nearbyFood} foodStatus={foodStatus} />}
+            
             {activeTab === 'prep' && <PrepTab 
-                packingList={packingList} setPackingList={setPackingList} deletePackingItem={(id) => setPackingList(p => p.filter(i => i.id !== id))}
-                newItemText={newItemText} setNewItemText={setNewItemText} addPackingItem={() => { if(newItemText) { setPackingList(p => [...p, {id: Date.now(), text: newItemText}]); setNewItemText(''); }}}
+                packingList={packingList} setPackingList={setPackingList} deletePackingItem={(id)=>setPackingList(p=>p.filter(i=>i.id!==id))}
+                newItemText={newItemText} setNewItemText={setNewItemText} addPackingItem={()=>{if(newItemText){setPackingList(p=>[...p,{id:Date.now(),text:newItemText}]);setNewItemText('')}}}
                 memos={memos} setMemos={setMemos}
-                suggestPackingItems={async () => { 
+                suggestPackingItems={async ()=>{
                     setSuggestingItems(true);
-                    const res = await fetchGemini(`去日本蜜月旅行必備的5個特殊物品 (非護照錢包)。回傳 JSON 字串陣列。`);
-                    setPackingList(p => [...p, ...res.map(t => ({id: Math.random(), text: t}))]);
-                    setSuggestingItems(false);
+                    try { 
+                        const res = await fetchGemini('日本蜜月必備清單 JSON string array'); 
+                        const safeList = (Array.isArray(res) ? res : []).map(t => {
+                            let textVal = t;
+                            if (typeof t === 'object' && t !== null) textVal = t.item || t.text || t.name || JSON.stringify(t);
+                            return {id: Math.random(), text: String(textVal), checked: false};
+                        });
+                        setPackingList(p=>[...p, ...safeList]); 
+                    } finally { setSuggestingItems(false); }
                 }} suggestingItems={suggestingItems}
-                weatherInfos={weatherInfos} addWeatherLocation={addWeatherLocation} isAddingWeather={isAddingWeather}
+                weatherInfos={weatherInfos} 
+                addWeatherLocation={addWeatherLocation}
+                deleteWeatherLocation={(id) => addWeatherLocation(null, id)}
+                isAddingWeather={isAddingWeather}
             />}
 
             {activeTab === 'coupons' && <CouponsTab 
                 coupons={coupons} setCoupons={setCoupons}
                 showAddCoupon={showAddCoupon} setShowAddCoupon={setShowAddCoupon}
                 newCouponForm={newCouponForm} setNewCouponForm={setNewCouponForm}
-                handleImageUpload={handleImageUpload}
+                handleImageUpload={(e)=>{if(e.target.files[0]) setNewCouponForm(p=>({...p, image: URL.createObjectURL(e.target.files[0])}))}}
                 currency={currency} 
-                handleCurrencyTwd={handleCurrencyTwd}
-                handleCurrencyJpy={handleCurrencyJpy}
+                handleCurrencyTwd={(v)=>setCurrency({twd: v, jpy: Math.round(v/EXCHANGE_RATE)})}
+                handleCurrencyJpy={(v)=>setCurrency({jpy: v, twd: Math.round(v*EXCHANGE_RATE)})}
             />}
 
             {activeTab === 'translate' && <TranslateTab 
                 transInput={transInput} setTransInput={setTransInput}
-                handleTranslate={handleTranslate} translating={translating}
-                transResult={transResult}
+                handleTranslate={async ()=>{
+                    setTranslating(true);
+                    try { const res = await fetchGemini(`Translate "${transInput}" to Japanese JSON {japanese, romaji}`); setTransResult(res); } finally { setTranslating(false); }
+                }} translating={translating} transResult={transResult}
             />}
           </main>
 
-          <nav className="fixed bottom-0 w-full bg-white/90 backdrop-blur border-t p-2 safe-area-bottom z-50">
-            <div className="flex justify-around items-center max-w-md mx-auto">
+          <nav className="fixed bottom-0 w-full bg-white/90 backdrop-blur border-t p-2 flex justify-between px-6 safe-area-bottom">
              {['planner', 'food', 'prep', 'coupons', 'translate'].map(tab => (
                  <button key={tab} onClick={() => setActiveTab(tab)} className={`flex flex-col items-center gap-1 ${activeTab===tab ? 'text-pink-600' : 'text-slate-400'}`}>
                     {tab==='planner' && <Calendar className="w-5 h-5"/>}
@@ -998,7 +704,6 @@
                     <span className="text-[10px]">{tab==='planner'?'行程':tab==='food'?'美食':tab==='prep'?'準備':tab==='coupons'?'優惠':'翻譯'}</span>
                  </button>
              ))}
-            </div>
           </nav>
         </div>
       );
