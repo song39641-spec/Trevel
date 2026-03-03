@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>日本蜜月行程管家 (AI 旗艦版)</title>
+  <title>日本蜜月行程管家 (終極完整版)</title>
   <meta name="robots" content="noindex, nofollow">
   
   <!-- Tailwind CSS -->
@@ -50,7 +50,7 @@
 <body>
   <div id="initial-loader">
     <div class="spinner"></div>
-    <p class="mt-4 text-pink-600 font-bold animate-pulse">正在啟動行程管家...</p>
+    <p class="mt-4 text-pink-600 font-bold animate-pulse">正在載入行程管家終極版...</p>
   </div>
 
   <div id="root"></div>
@@ -62,7 +62,7 @@
       Calendar, MapPin, Utensils, CloudSun, ClipboardList, Ticket, 
       Plus, Trash2, Navigation, Heart, Edit2, CheckCircle, 
       ExternalLink, Loader2, RefreshCw, Image as ImageIcon, X,
-      Languages, Sparkles, Cloud, ThermometerSun, Save, Calculator, Percent, AlertCircle, WifiOff, Users, ChevronDown, ChevronRight, RotateCcw, AlertTriangle, FileQuestion, LocateFixed, Camera, PenTool, GripVertical
+      Languages, Sparkles, Cloud, ThermometerSun, Save, Calculator, Percent, AlertCircle, WifiOff, Users, ChevronDown, ChevronRight, RotateCcw, AlertTriangle, FileQuestion, LocateFixed, Camera, PenTool, GripVertical, Route, Plane, BedDouble
     } from 'lucide-react';
 
     import { initializeApp } from 'firebase/app';
@@ -70,7 +70,6 @@
     import { getFirestore, doc, setDoc, onSnapshot, getDoc } from 'firebase/firestore';
 
     // AI API Key (De-identified)
-    // 將 Key 拆解成多個部分，避免直接被爬蟲正則表達式掃描到
     const _k_part1 = "AIzaSy";
     const _k_part2 = "BB0CxGCZWpE";
     const _k_part3 = "2d_GrAwiWR0";
@@ -97,8 +96,8 @@
 
     // --- AI Helper ---
     const fetchGemini = async (prompt, systemPrompt = "", setStatus) => {
-      // 為了避免權限與 not found 錯誤，切換回保證可用的預覽版模型
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+      // 🚀 切換至更強大的 gemini-2.5-pro 模型
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${apiKey}`;
       
       if(setStatus) setStatus("正在連線 AI 模型...");
       
@@ -128,13 +127,10 @@
           if (!text) throw new Error("AI 回傳內容為空");
 
           if(setStatus) setStatus("正在解析資料...");
-          console.log("Raw AI Response:", text); 
-
-          // Robust Parsing 升級版：避免 AI 亂回傳物件包裝的陣列或混雜 Markdown
+          
           let parsed;
           try {
-              // 先清除非 JSON 格式的標籤
-              const cleanText = text.replace(/^```json\s*/, "").replace(/^```\s*/, "").replace(/```$/, "").trim();
+              const cleanText = text.replace(/^```json\s*/g, "").replace(/^```\s*/g, "").replace(/```$/g, "").trim();
               parsed = JSON.parse(cleanText);
           } catch(e) {
               const arrayMatch = text.match(/\[[\s\S]*\]/);
@@ -149,20 +145,22 @@
               }
           }
           
-          if (!parsed) throw new Error("無法解析 AI 回傳的資料格式");
+          if (!parsed) throw new Error("無法從 AI 的回覆中解析出有效的 JSON 資料");
           
-          // 如果 AI 硬是包了一層 Object (例如 { itinerary: [...] })，自動提取裡面的陣列
-          if (!Array.isArray(parsed) && typeof parsed === 'object') {
-              const keys = Object.keys(parsed);
-              let foundArray = null;
-              for (const key of keys) {
-                  if (Array.isArray(parsed[key])) {
-                      foundArray = parsed[key];
-                      break;
+          if (prompt.includes("規劃") && prompt.includes("行程")) {
+              if (!Array.isArray(parsed) && typeof parsed === 'object') {
+                  const keys = Object.keys(parsed);
+                  let foundArray = null;
+                  for (const key of keys) {
+                      if (Array.isArray(parsed[key])) {
+                          foundArray = parsed[key];
+                          break;
+                      }
                   }
+                  parsed = foundArray || [parsed];
+              } else if (!Array.isArray(parsed)) {
+                  parsed = [];
               }
-              if (foundArray) parsed = foundArray;
-              else parsed = [parsed]; // 如果真的找不到陣列，就包裝成陣列以防地圖崩潰
           }
 
           return parsed;
@@ -178,6 +176,130 @@
     };
 
     // --- COMPONENTS ---
+
+    // === 機酒分頁組件 ===
+    const BookingsTab = memo(({ flights, setFlights, hotels, setHotels }) => {
+       const [showFlightModal, setShowFlightModal] = useState(false);
+       const [showHotelModal, setShowHotelModal] = useState(false);
+       const [fForm, setFForm] = useState({ date: '', flightNo: '', depTime: '', depAirport: '', arrTime: '', arrAirport: '' });
+       const [hForm, setHForm] = useState({ checkIn: '', checkOut: '', name: '', address: '', bookingId: '' });
+
+       const addFlight = () => {
+           setFlights(p => [...p, { id: Date.now(), ...fForm }]);
+           setShowFlightModal(false);
+           setFForm({ date: '', flightNo: '', depTime: '', depAirport: '', arrTime: '', arrAirport: '' });
+       };
+
+       const addHotel = () => {
+           setHotels(p => [...p, { id: Date.now(), ...hForm }]);
+           setShowHotelModal(false);
+           setHForm({ checkIn: '', checkOut: '', name: '', address: '', bookingId: '' });
+       };
+
+       return (
+         <div className="space-y-6 animate-in slide-in-from-right duration-300">
+            <div className="bg-white p-5 rounded-2xl shadow-sm text-center relative overflow-hidden border border-blue-100">
+               <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-400 to-indigo-500"></div>
+               <h2 className="text-lg font-bold flex items-center justify-center gap-2 text-blue-700">
+                  <Plane className="w-5 h-5" /> 航班與住宿管理
+               </h2>
+               <p className="text-xs text-slate-500 mt-1">統一管理已預訂的機票與飯店資訊</p>
+               <div className="flex gap-2 mt-4">
+                  <button onClick={() => setShowFlightModal(true)} className="flex-1 bg-blue-50 text-blue-600 py-2 rounded-xl text-sm font-bold flex items-center justify-center gap-1 hover:bg-blue-100 transition"><Plane className="w-4 h-4"/> 新增航班</button>
+                  <button onClick={() => setShowHotelModal(true)} className="flex-1 bg-indigo-50 text-indigo-600 py-2 rounded-xl text-sm font-bold flex items-center justify-center gap-1 hover:bg-indigo-100 transition"><BedDouble className="w-4 h-4"/> 新增住宿</button>
+               </div>
+            </div>
+
+            {flights.length > 0 && (
+                <div className="space-y-3">
+                    <h3 className="font-bold text-slate-700 flex items-center gap-2"><Plane className="w-4 h-4 text-blue-500"/> 航班資訊</h3>
+                    {flights.map(f => (
+                        <div key={f.id} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 relative group">
+                            <button onClick={()=>setFlights(p=>p.filter(x=>x.id!==f.id))} className="absolute top-2 right-2 text-slate-300 hover:text-red-500"><Trash2 className="w-4 h-4"/></button>
+                            <div className="flex justify-between items-center mb-2">
+                                <span className="text-sm font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded">{f.date}</span>
+                                <span className="font-mono font-bold text-slate-700 mr-6">{f.flightNo}</span>
+                            </div>
+                            <div className="flex justify-between items-center mt-3">
+                                <div className="text-center flex-1">
+                                    <p className="text-xl font-bold">{f.depTime}</p>
+                                    <p className="text-xs text-slate-500">{f.depAirport}</p>
+                                </div>
+                                <div className="text-slate-300 px-2">➔</div>
+                                <div className="text-center flex-1">
+                                    <p className="text-xl font-bold">{f.arrTime}</p>
+                                    <p className="text-xs text-slate-500">{f.arrAirport}</p>
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {hotels.length > 0 && (
+                <div className="space-y-3">
+                    <h3 className="font-bold text-slate-700 flex items-center gap-2 mt-2"><BedDouble className="w-4 h-4 text-indigo-500"/> 住宿資訊</h3>
+                    {hotels.map(h => (
+                        <div key={h.id} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 relative group border-l-4 border-l-indigo-400">
+                            <button onClick={()=>setHotels(p=>p.filter(x=>x.id!==h.id))} className="absolute top-2 right-2 text-slate-300 hover:text-red-500"><Trash2 className="w-4 h-4"/></button>
+                            <h4 className="font-bold text-slate-800 pr-6">{h.name}</h4>
+                            <div className="text-xs text-slate-500 mt-2 space-y-1">
+                                <p className="flex justify-between bg-slate-50 p-1.5 rounded"><span className="font-medium text-slate-600">入住: {h.checkIn}</span> <span className="font-medium text-slate-600">退房: {h.checkOut}</span></p>
+                                <p className="flex items-start gap-1 mt-1 cursor-pointer hover:underline text-indigo-500" onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(h.name + ' ' + h.address)}`, '_blank')}><MapPin className="w-3 h-3 flex-shrink-0 mt-0.5 text-indigo-400"/> {h.address}</p>
+                                {h.bookingId && <p className="font-mono text-indigo-600 bg-indigo-50 inline-block px-2 py-1 rounded mt-1">訂單編號: {h.bookingId}</p>}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {showFlightModal && (
+                <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
+                    <div className="bg-white p-5 rounded-3xl w-full max-w-sm">
+                        <h3 className="font-bold mb-4 text-lg">新增航班</h3>
+                        <div className="space-y-3">
+                            <div><label className="text-xs text-slate-400 font-bold ml-1">飛行日期</label><input type="date" value={fForm.date} onChange={e=>setFForm({...fForm, date: e.target.value})} className="w-full p-3 border border-slate-100 bg-slate-50 rounded-xl text-sm outline-none focus:border-blue-300" /></div>
+                            <div><label className="text-xs text-slate-400 font-bold ml-1">航班編號</label><input type="text" placeholder="例: BR112" value={fForm.flightNo} onChange={e=>setFForm({...fForm, flightNo: e.target.value})} className="w-full p-3 border border-slate-100 bg-slate-50 rounded-xl text-sm outline-none focus:border-blue-300" /></div>
+                            <div className="flex gap-2">
+                                <div className="flex-1"><label className="text-xs text-slate-400 font-bold ml-1">起飛時間</label><input type="time" value={fForm.depTime} onChange={e=>setFForm({...fForm, depTime: e.target.value})} className="w-full p-3 border border-slate-100 bg-slate-50 rounded-xl text-sm outline-none focus:border-blue-300" /></div>
+                                <div className="flex-1"><label className="text-xs text-slate-400 font-bold ml-1">起飛機場</label><input type="text" placeholder="例: 桃園 TPE" value={fForm.depAirport} onChange={e=>setFForm({...fForm, depAirport: e.target.value})} className="w-full p-3 border border-slate-100 bg-slate-50 rounded-xl text-sm outline-none focus:border-blue-300" /></div>
+                            </div>
+                            <div className="flex gap-2">
+                                <div className="flex-1"><label className="text-xs text-slate-400 font-bold ml-1">抵達時間</label><input type="time" value={fForm.arrTime} onChange={e=>setFForm({...fForm, arrTime: e.target.value})} className="w-full p-3 border border-slate-100 bg-slate-50 rounded-xl text-sm outline-none focus:border-blue-300" /></div>
+                                <div className="flex-1"><label className="text-xs text-slate-400 font-bold ml-1">抵達機場</label><input type="text" placeholder="例: 新千歲 CTS" value={fForm.arrAirport} onChange={e=>setFForm({...fForm, arrAirport: e.target.value})} className="w-full p-3 border border-slate-100 bg-slate-50 rounded-xl text-sm outline-none focus:border-blue-300" /></div>
+                            </div>
+                        </div>
+                        <div className="flex gap-2 mt-6">
+                            <button onClick={()=>setShowFlightModal(false)} className="flex-1 p-3 bg-slate-100 text-slate-600 rounded-xl font-bold">取消</button>
+                            <button onClick={addFlight} className="flex-1 p-3 bg-blue-500 text-white rounded-xl font-bold hover:bg-blue-600">儲存航班</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            
+            {showHotelModal && (
+                <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
+                    <div className="bg-white p-5 rounded-3xl w-full max-w-sm">
+                        <h3 className="font-bold mb-4 text-lg">新增住宿</h3>
+                        <div className="space-y-3">
+                            <div><label className="text-xs text-slate-400 font-bold ml-1">飯店名稱</label><input type="text" placeholder="例: 札幌格蘭大飯店" value={hForm.name} onChange={e=>setHForm({...hForm, name: e.target.value})} className="w-full p-3 border border-slate-100 bg-slate-50 rounded-xl text-sm outline-none focus:border-indigo-300" /></div>
+                            <div className="flex gap-2">
+                                <div className="flex-1"><label className="text-xs text-slate-400 font-bold ml-1">入住日期</label><input type="date" value={hForm.checkIn} onChange={e=>setHForm({...hForm, checkIn: e.target.value})} className="w-full p-3 border border-slate-100 bg-slate-50 rounded-xl text-sm outline-none focus:border-indigo-300" /></div>
+                                <div className="flex-1"><label className="text-xs text-slate-400 font-bold ml-1">退房日期</label><input type="date" value={hForm.checkOut} onChange={e=>setHForm({...hForm, checkOut: e.target.value})} className="w-full p-3 border border-slate-100 bg-slate-50 rounded-xl text-sm outline-none focus:border-indigo-300" /></div>
+                            </div>
+                            <div><label className="text-xs text-slate-400 font-bold ml-1">地址/導航用</label><input type="text" placeholder="飯店地址" value={hForm.address} onChange={e=>setHForm({...hForm, address: e.target.value})} className="w-full p-3 border border-slate-100 bg-slate-50 rounded-xl text-sm outline-none focus:border-indigo-300" /></div>
+                            <div><label className="text-xs text-slate-400 font-bold ml-1">訂單編號 (選填)</label><input type="text" placeholder="Booking/Agoda Ref" value={hForm.bookingId} onChange={e=>setHForm({...hForm, bookingId: e.target.value})} className="w-full p-3 border border-slate-100 bg-slate-50 rounded-xl text-sm outline-none focus:border-indigo-300 font-mono" /></div>
+                        </div>
+                        <div className="flex gap-2 mt-6">
+                            <button onClick={()=>setShowHotelModal(false)} className="flex-1 p-3 bg-slate-100 text-slate-600 rounded-xl font-bold">取消</button>
+                            <button onClick={addHotel} className="flex-1 p-3 bg-indigo-500 text-white rounded-xl font-bold hover:bg-indigo-600">儲存住宿</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+         </div>
+       );
+    });
 
     const WeatherCard = memo(({ info, onDelete }) => (
       <div className="bg-gradient-to-br from-blue-400 to-blue-600 rounded-2xl p-5 text-white shadow-md relative overflow-hidden mb-4 animate-in slide-in-from-top-2">
@@ -207,8 +329,38 @@
       </div>
     ));
 
-    const DaySection = memo(({ day, dIdx, currentTripId, updateEvent, addEvent, deleteEvent, handleDragStart, handleDragEnter, handleDragEnd, handleDragOver, draggingId }) => {
+    const DaySection = memo(({ day, dIdx, currentTripId, updateEvent, addEvent, deleteEvent, handleDragStart, handleDragEnter, handleDragEnd, handleDragOver, draggingId, updateDayWishlist, optimizeDayRoute }) => {
         const [isExpanded, setIsExpanded] = useState(true);
+        const [isOptimizing, setIsOptimizing] = useState(false);
+
+        // 生成 Google 地圖導航路線
+        const openGoogleMaps = () => {
+            const validEvents = (day.events || []).filter(e => e.location && e.location.trim() !== '');
+            if (validEvents.length === 0) {
+                alert("請先填寫景點或餐廳的位置，才能產生路線喔！");
+                return;
+            }
+            if (validEvents.length === 1) {
+                window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(validEvents[0].location)}`, '_blank');
+                return;
+            }
+
+            const origin = encodeURIComponent(validEvents[0].location);
+            const destination = encodeURIComponent(validEvents[validEvents.length - 1].location);
+            let url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}`;
+            
+            if (validEvents.length > 2) {
+                const waypoints = validEvents.slice(1, -1).map(e => encodeURIComponent(e.location)).join('|');
+                url += `&waypoints=${waypoints}`;
+            }
+            window.open(url, '_blank');
+        };
+
+        const handleAIReorder = async () => {
+            setIsOptimizing(true);
+            await optimizeDayRoute(currentTripId, dIdx, day.events, day.wishlistText);
+            setIsOptimizing(false);
+        };
 
         return (
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden mb-4">
@@ -229,7 +381,6 @@
                     <div className="p-4 relative">
                         <div className="absolute left-[27px] top-4 bottom-4 w-0.5 bg-slate-100"></div>
                         
-                        {/* 支援空天數的拖曳放置區 */}
                         {(!day.events || day.events.length === 0) && (
                             <div 
                                 onDragEnter={(e) => handleDragEnter(e, dIdx, 0)}
@@ -256,12 +407,12 @@
                                         value={event.time || ''} 
                                         onChange={(e) => updateEvent(currentTripId, dIdx, eIdx, 'time', e.target.value)}
                                         className="text-xs font-bold text-slate-400 w-full text-right focus:text-pink-500 focus:outline-none bg-transparent"
+                                        placeholder="時間"
                                     />
                                 </div>
                                 <div className="absolute left-[11px] top-2 w-2.5 h-2.5 rounded-full bg-pink-300 border-2 border-white shadow-sm z-20"></div>
                                 <div className="flex-grow bg-slate-50/50 rounded-xl p-3 pl-8 border border-slate-100 hover:border-pink-200 hover:shadow-sm transition-all group-hover:bg-white relative">
                                     
-                                    {/* 拖曳手把 (Grip) */}
                                     <div className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-300 hover:text-pink-500 cursor-grab active:cursor-grabbing flex items-center justify-center h-full">
                                         <GripVertical className="w-4 h-4" />
                                     </div>
@@ -279,6 +430,7 @@
                                             value={event.activity || ''} 
                                             onChange={(e) => updateEvent(currentTripId, dIdx, eIdx, 'activity', e.target.value)}
                                             className="w-full font-bold text-slate-700 text-sm focus:outline-none bg-transparent border-b border-transparent focus:border-pink-200"
+                                            placeholder="行程或活動名稱"
                                         />
                                     </div>
                                     <div className="flex items-center gap-1 text-xs text-blue-500 mb-2">
@@ -288,11 +440,12 @@
                                             value={event.location || ''} 
                                             onChange={(e) => updateEvent(currentTripId, dIdx, eIdx, 'location', e.target.value)}
                                             className="w-full bg-transparent focus:outline-none border-b border-transparent focus:border-pink-200 text-blue-500 placeholder-blue-300 truncate"
-                                            placeholder="輸入地點..."
+                                            placeholder="地點 (地圖搜尋用)..."
                                         />
                                         <button 
                                             onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.location)}`, '_blank')}
                                             className="p-1 hover:bg-blue-50 rounded-full"
+                                            title="單獨開啟地圖"
                                         >
                                             <ExternalLink className="w-3 h-3" />
                                         </button>
@@ -308,23 +461,52 @@
                                 </div>
                             </div>
                         ))}
+                        
                         <button 
                             onClick={() => addEvent(currentTripId, dIdx)}
                             className="mt-4 ml-16 w-[calc(100%-4rem)] border-2 border-dashed border-pink-200 text-pink-500 py-2 rounded-xl text-sm font-bold hover:bg-pink-50 transition flex items-center justify-center gap-1"
                         >
                             <Plus className="w-4 h-4" /> 增加地點 / 行程
                         </button>
+
+                        <div className="ml-16 mt-6 bg-pink-50/50 p-4 rounded-xl border border-pink-100">
+                            <label className="text-xs font-bold text-pink-600 mb-2 flex items-center gap-1">
+                                <Heart className="w-4 h-4 fill-pink-600"/> 當日心願清單 (想吃/想去)
+                            </label>
+                            <textarea 
+                                value={day.wishlistText || ''} 
+                                onChange={e => updateDayWishlist(currentTripId, dIdx, e.target.value)}
+                                placeholder="例如：中午想吃海膽、下午想去天狗山看夜景..."
+                                className="w-full text-sm p-3 rounded-xl border border-pink-100 focus:outline-none focus:ring-2 focus:ring-pink-300 resize-none min-h-[60px] mb-3 bg-white"
+                            />
+                            <div className="flex flex-col sm:flex-row gap-2">
+                                <button 
+                                    onClick={handleAIReorder}
+                                    disabled={isOptimizing}
+                                    className="flex-1 bg-gradient-to-r from-pink-400 to-rose-400 text-white py-2.5 rounded-xl text-sm font-bold shadow-sm hover:shadow-md transition active:scale-95 flex items-center justify-center gap-1 disabled:opacity-70"
+                                >
+                                    {isOptimizing ? <Loader2 className="w-4 h-4 animate-spin"/> : <Sparkles className="w-4 h-4"/>} 
+                                    {isOptimizing ? "AI 排列中..." : "AI 智能排路順"}
+                                </button>
+                                <button 
+                                    onClick={openGoogleMaps}
+                                    className="flex-1 bg-blue-500 text-white py-2.5 rounded-xl text-sm font-bold shadow-sm hover:shadow-md transition hover:bg-blue-600 active:scale-95 flex items-center justify-center gap-1"
+                                >
+                                    <Route className="w-4 h-4"/> 產生 Google 地圖路線
+                                </button>
+                            </div>
+                        </div>
+
                     </div>
                 )}
             </div>
         );
     });
 
-    const NewPlannerTab = memo(({ trips, selectedTripId, setSelectedTripId, deleteTrip, onAddTrip, loading, loadingStatus, updateEvent, addEvent, deleteEvent, reorderEvent }) => {
+    const NewPlannerTab = memo(({ trips, selectedTripId, setSelectedTripId, deleteTrip, onAddTrip, loading, loadingStatus, updateEvent, addEvent, deleteEvent, reorderEvent, updateDayWishlist, optimizeDayRoute }) => {
         const [showModal, setShowModal] = useState(false);
-        const [form, setForm] = useState({ location: '北海道', days: 5, startDate: '2026-03-04' });
+        const [form, setForm] = useState({ location: '北海道', days: 5, startDate: '2026-03-04', arrivalTime: '14:00' });
 
-        // Drag and Drop 狀態管理
         const dragItem = useRef(null);
         const dragOverItem = useRef(null);
         const [draggingId, setDraggingId] = useState(null);
@@ -343,7 +525,6 @@
         const handleDragEnd = (e) => {
             setDraggingId(null);
             if (dragItem.current && dragOverItem.current) {
-                // 如果目標與來源相同則不處理
                 if (dragItem.current.dayIdx !== dragOverItem.current.dayIdx ||
                     dragItem.current.eventIdx !== dragOverItem.current.eventIdx) {
                     reorderEvent(
@@ -360,12 +541,12 @@
         };
 
         const handleDragOver = (e) => {
-            e.preventDefault(); // 必須 preventDefault 才能觸發 drop
+            e.preventDefault(); 
             e.dataTransfer.dropEffect = "move";
         };
 
         const handleCreate = () => {
-            onAddTrip(form.location, form.days, form.startDate, () => setShowModal(false));
+            onAddTrip(form.location, form.days, form.startDate, form.arrivalTime, () => setShowModal(false));
         };
 
         if (!trips || trips.length === 0) {
@@ -389,13 +570,18 @@
                                     <input type="number" value={form.days} onChange={e=>setForm({...form, days: e.target.value})} className="w-full p-3 bg-slate-50 rounded-xl text-sm border focus:border-pink-300 outline-none" />
                                 </div>
                                 <div className="flex-1">
-                                    <label className="text-xs text-slate-400 font-bold ml-1">日期</label>
+                                    <label className="text-xs text-slate-400 font-bold ml-1">開始日期</label>
                                     <input type="date" value={form.startDate} onChange={e=>setForm({...form, startDate: e.target.value})} className="w-full p-3 bg-slate-50 rounded-xl text-sm border focus:border-pink-300 outline-none" />
                                 </div>
                             </div>
+                            <div>
+                                <label className="text-xs text-slate-400 font-bold ml-1">抵達時間 (選填)</label>
+                                <input type="time" value={form.arrivalTime} onChange={e=>setForm({...form, arrivalTime: e.target.value})} className="w-full p-3 bg-slate-50 rounded-xl text-sm border focus:border-pink-300 outline-none" />
+                                <p className="text-[10px] text-slate-400 mt-1 ml-1">AI 會根據抵達時間幫您安排第一天的起始行程</p>
+                            </div>
                         </div>
 
-                        <button onClick={handleCreate} disabled={loading} className="w-full bg-pink-500 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-pink-600 transition disabled:opacity-50">
+                        <button onClick={handleCreate} disabled={loading} className="w-full bg-pink-500 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-pink-600 transition disabled:opacity-50 shadow-md">
                             {loading ? <><Loader2 className="animate-spin w-4 h-4"/> {loadingStatus || "生成中..."}</> : "AI 生成行程"}
                         </button>
                     </div>
@@ -414,8 +600,8 @@
                             {selectedTripId === trip.id && <X className="w-3 h-3 ml-1 opacity-70 hover:opacity-100" onClick={(e)=>{e.stopPropagation(); if(confirm('刪除此行程?')) deleteTrip(trip.id)}} />}
                         </button>
                     ))}
-                    <button onClick={() => setShowModal(true)} className="flex-shrink-0 px-3 py-2 rounded-full bg-white border border-dashed border-pink-300 text-pink-500 text-sm font-medium flex items-center gap-1">
-                        <Plus className="w-4 h-4" />
+                    <button onClick={() => setShowModal(true)} className="flex-shrink-0 px-3 py-2 rounded-full bg-white border border-dashed border-pink-300 text-pink-500 text-sm font-medium flex items-center gap-1 hover:bg-pink-50">
+                        <Plus className="w-4 h-4" /> 新行程
                     </button>
                 </div>
 
@@ -434,6 +620,8 @@
                             handleDragEnd={handleDragEnd}
                             handleDragOver={handleDragOver}
                             draggingId={draggingId}
+                            updateDayWishlist={updateDayWishlist}
+                            optimizeDayRoute={optimizeDayRoute}
                         />
                     ))}
                 </div>
@@ -444,8 +632,14 @@
                             <h3 className="font-bold text-lg mb-4">新增城市行程</h3>
                             <div className="space-y-3 mb-4">
                                 <input type="text" placeholder="城市" value={form.location} onChange={e=>setForm({...form, location: e.target.value})} className="w-full p-3 border rounded-xl" />
-                                <input type="number" placeholder="天數" value={form.days} onChange={e=>setForm({...form, days: e.target.value})} className="w-full p-3 border rounded-xl" />
-                                <input type="date" value={form.startDate} onChange={e=>setForm({...form, startDate: e.target.value})} className="w-full p-3 border rounded-xl" />
+                                <div className="flex gap-2">
+                                    <input type="number" placeholder="天數" value={form.days} onChange={e=>setForm({...form, days: e.target.value})} className="w-full p-3 border rounded-xl" />
+                                    <input type="date" value={form.startDate} onChange={e=>setForm({...form, startDate: e.target.value})} className="w-full p-3 border rounded-xl" />
+                                </div>
+                                <div>
+                                    <label className="text-xs text-slate-400 font-bold ml-1">抵達時間 (選填)</label>
+                                    <input type="time" placeholder="第一天抵達時間" value={form.arrivalTime} onChange={e=>setForm({...form, arrivalTime: e.target.value})} className="w-full p-3 border rounded-xl" />
+                                </div>
                             </div>
                             <div className="flex gap-2">
                                 <button onClick={()=>setShowModal(false)} disabled={loading} className="flex-1 p-3 bg-slate-100 rounded-xl text-slate-500">取消</button>
@@ -700,6 +894,8 @@
       const [packingList, setPackingList] = useState([]);
       const [coupons, setCoupons] = useState([]);
       const [weatherInfos, setWeatherInfos] = useState([]);
+      const [flights, setFlights] = useState([]);
+      const [hotels, setHotels] = useState([]);
       
       const [newItemText, setNewItemText] = useState('');
       const [suggestingItems, setSuggestingItems] = useState(false);
@@ -746,6 +942,8 @@
                         setMemos(d.memos || []);
                         setCoupons(d.coupons || []);
                         setWeatherInfos(d.weatherInfos || []);
+                        setFlights(d.flights || []);
+                        setHotels(d.hotels || []);
                         
                         setSelectedTripId(prev => {
                             if (prev && d.trips?.find(t => t.id === prev)) return prev;
@@ -775,24 +973,25 @@
           if (status === 'ready' && !isRemoteUpdate.current) {
               if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
               saveTimeoutRef.current = setTimeout(() => {
-                 saveToCloud({ trips, packingList, memos, coupons, weatherInfos });
+                 saveToCloud({ trips, packingList, memos, coupons, weatherInfos, flights, hotels });
               }, 1500);
           }
-      }, [status, trips, packingList, memos, coupons, weatherInfos, saveToCloud]);
+      }, [status, trips, packingList, memos, coupons, weatherInfos, flights, hotels, saveToCloud]);
 
       // --- Handlers ---
-      const handleAddTrip = async (loc, days, start, callback) => {
+      const handleAddTrip = async (loc, days, start, arrivalTime, callback) => {
           setTripLoading(true);
           setTripStatus("AI 正在規劃行程...");
           try {
-              const systemPrompt = `你是一位專業的日本旅遊規劃師。請務必直接回傳一個 JSON 陣列 (Array)，不要包含其他多餘的文字。格式必須嚴格如下：\n[\n  {\n    "day": 1,\n    "date": "YYYY-MM-DD",\n    "title": "當天主題",\n    "events": [\n      {\n        "time": "14:00",\n        "activity": "活動名稱",\n        "location": "地點名稱",\n        "note": "簡短備註"\n      }\n    ]\n  }\n]`;
-              const result = await fetchGemini(
-                  `規劃${start}開始的${days}天${loc}蜜月行程，請安排浪漫、美食與代表性景點。`, 
-                  systemPrompt,
-                  setTripStatus
-              );
+              let promptText = `規劃${start}開始的${days}天${loc}蜜月行程，請安排浪漫、美食與代表性景點。`;
+              if (arrivalTime) {
+                  promptText += `\n請注意：第一天預計於 ${arrivalTime} 抵達，第一天的行程請從這個時間點之後開始安排。`;
+              }
+
+              const systemPrompt = `你是一位專業的日本旅遊規劃師。請務必直接回傳一個 JSON 陣列 (Array)，不要包含其他多餘的文字。格式必須嚴格如下：\n[\n  {\n    "day": 1,\n    "date": "YYYY-MM-DD",\n    "title": "當天主題",\n    "wishlistText": "",\n    "events": [\n      {\n        "time": "14:00",\n        "activity": "活動名稱",\n        "location": "地點名稱",\n        "note": "簡短備註"\n      }\n    ]\n  }\n]`;
+              const result = await fetchGemini(promptText, systemPrompt, setTripStatus);
               
-              const newTrip = { id: Date.now(), location: loc, days, startDate: start, itineraryData: result };
+              const newTrip = { id: Date.now(), location: loc, days, startDate: start, arrivalTime, itineraryData: result };
               setTrips(prev => [...prev, newTrip]);
               setSelectedTripId(newTrip.id);
               callback && callback();
@@ -819,6 +1018,42 @@
         }));
       }, []);
 
+      const updateDayWishlist = useCallback((tripId, dayIdx, text) => {
+          setTrips(prev => prev.map(trip => {
+              if (trip.id === tripId) {
+                  const newData = [...trip.itineraryData];
+                  newData[dayIdx] = { ...newData[dayIdx], wishlistText: text };
+                  return { ...trip, itineraryData: newData };
+              }
+              return trip;
+          }));
+      }, []);
+
+      const optimizeDayRoute = useCallback(async (tripId, dayIdx, currentEvents, wishlistText) => {
+          try {
+              const systemPrompt = `你是一位專業的行程路線規劃師。請回傳一個 JSON 陣列 (Array)，不要包含其他多餘的文字。格式：[{"time":"10:00", "activity":"...", "location":"...", "note":"..."}]`;
+              const userPrompt = `
+              請幫我重新安排以下行程的順序，使其在地理位置上最順路。
+              目前已排定的地點：${JSON.stringify(currentEvents)}
+              另外我還想加入這些心願(美食/景點)：${wishlistText || '無'}
+              請結合上述兩者，安排出一個最順路的行程表，並分配合理的時間。
+              `;
+              
+              const optimizedEvents = await fetchGemini(userPrompt, systemPrompt);
+              
+              setTrips(prev => prev.map(trip => {
+                  if (trip.id === tripId) {
+                      const newData = [...trip.itineraryData];
+                      newData[dayIdx] = { ...newData[dayIdx], events: optimizedEvents };
+                      return { ...trip, itineraryData: newData };
+                  }
+                  return trip;
+              }));
+          } catch(e) {
+              alert("排路順失敗: " + e.message);
+          }
+      }, []);
+
       const reorderEvent = useCallback((tripId, sourceDayIdx, sourceEventIdx, targetDayIdx, targetEventIdx) => {
         setTrips(prev => prev.map(trip => {
           if (trip.id === tripId) {
@@ -829,9 +1064,7 @@
             const sourceEvents = [...(sourceDay.events || [])];
             let targetEvents = sourceDayIdx === targetDayIdx ? sourceEvents : [...(targetDay.events || [])];
 
-            // 取出被拖曳的項目
             const [draggedItem] = sourceEvents.splice(sourceEventIdx, 1);
-            // 插入到新位置
             targetEvents.splice(targetEventIdx, 0, draggedItem);
 
             sourceDay.events = sourceEvents;
@@ -982,6 +1215,13 @@
                 addEvent={addEvent}
                 deleteEvent={deleteEvent}
                 reorderEvent={reorderEvent}
+                updateDayWishlist={updateDayWishlist}
+                optimizeDayRoute={optimizeDayRoute}
+            />}
+
+            {activeTab === 'bookings' && <BookingsTab 
+                flights={flights} setFlights={setFlights}
+                hotels={hotels} setHotels={setHotels}
             />}
 
             {activeTab === 'food' && <FoodTab 
@@ -1046,15 +1286,16 @@
             />}
           </main>
 
-          <nav className="fixed bottom-0 w-full bg-white/90 backdrop-blur border-t p-2 flex justify-between px-6 safe-area-bottom">
-             {['planner', 'food', 'prep', 'coupons', 'translate'].map(tab => (
-                 <button key={tab} onClick={() => setActiveTab(tab)} className={`flex flex-col items-center gap-1 ${activeTab===tab ? 'text-pink-600' : 'text-slate-400'}`}>
+          <nav className="fixed bottom-0 w-full bg-white/90 backdrop-blur border-t p-2 flex justify-between px-3 sm:px-6 safe-area-bottom overflow-x-auto no-scrollbar">
+             {['planner', 'bookings', 'food', 'prep', 'coupons', 'translate'].map(tab => (
+                 <button key={tab} onClick={() => setActiveTab(tab)} className={`flex flex-col items-center gap-1 min-w-[3.5rem] ${activeTab===tab ? 'text-pink-600' : 'text-slate-400'}`}>
                     {tab==='planner' && <Calendar className="w-5 h-5"/>}
+                    {tab==='bookings' && <Plane className="w-5 h-5"/>}
                     {tab==='food' && <Utensils className="w-5 h-5"/>}
                     {tab==='prep' && <ClipboardList className="w-5 h-5"/>}
                     {tab==='coupons' && <Ticket className="w-5 h-5"/>}
                     {tab==='translate' && <Languages className="w-5 h-5"/>}
-                    <span className="text-[10px]">{tab==='planner'?'行程':tab==='food'?'探索':tab==='prep'?'準備':tab==='coupons'?'優惠':'翻譯'}</span>
+                    <span className="text-[10px]">{tab==='planner'?'行程':tab==='bookings'?'機酒':tab==='food'?'探索':tab==='prep'?'準備':tab==='coupons'?'優惠':'翻譯'}</span>
                  </button>
              ))}
           </nav>
