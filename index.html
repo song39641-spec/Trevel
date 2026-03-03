@@ -97,8 +97,8 @@
 
     // --- AI Helper ---
     const fetchGemini = async (prompt, systemPrompt = "", setStatus) => {
-      // 已將模型修正為支援 generateContent 的穩定版本 gemini-1.5-flash
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+      // 為了避免權限與 not found 錯誤，切換回保證可用的預覽版模型
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
       
       if(setStatus) setStatus("正在連線 AI 模型...");
       
